@@ -38,46 +38,44 @@
 #include "st7789.h"
 #include "st7789_parallel.pio.h"
 
-
 #define ST7789_240x240_XSTART 0
 #define ST7789_240x240_YSTART 0
 #define ST7789_135x240_XSTART 52
 #define ST7789_135x240_YSTART 40
 
-
 // color modes
-#define COLOR_MODE_65K      0x50
-#define COLOR_MODE_262K     0x60
-#define COLOR_MODE_12BIT    0x03
-#define COLOR_MODE_16BIT    0x05
-#define COLOR_MODE_18BIT    0x06
-#define COLOR_MODE_16M      0x07
+#define COLOR_MODE_65K 0x50
+#define COLOR_MODE_262K 0x60
+#define COLOR_MODE_12BIT 0x03
+#define COLOR_MODE_16BIT 0x05
+#define COLOR_MODE_18BIT 0x06
+#define COLOR_MODE_16M 0x07
 
 // commands
-#define ST7789_NOP     0x00
+#define ST7789_NOP 0x00
 #define ST7789_SWRESET 0x01
-#define ST7789_RDDID   0x04
-#define ST7789_RDDST   0x09
+#define ST7789_RDDID 0x04
+#define ST7789_RDDST 0x09
 
-#define ST7789_SLPIN   0x10
-#define ST7789_SLPOUT  0x11
-#define ST7789_PTLON   0x12
-#define ST7789_NORON   0x13
+#define ST7789_SLPIN 0x10
+#define ST7789_SLPOUT 0x11
+#define ST7789_PTLON 0x12
+#define ST7789_NORON 0x13
 
-#define ST7789_INVOFF  0x20
-#define ST7789_INVON   0x21
+#define ST7789_INVOFF 0x20
+#define ST7789_INVON 0x21
 #define ST7789_DISPOFF 0x28
-#define ST7789_DISPON  0x29
-#define ST7789_CASET   0x2A 
-#define ST7789_RASET   0x2B
-#define ST7789_RAMWR   0x2C
-#define ST7789_RAMRD   0x2E
+#define ST7789_DISPON 0x29
+#define ST7789_CASET 0x2A
+#define ST7789_RASET 0x2B
+#define ST7789_RAMWR 0x2C
+#define ST7789_RAMRD 0x2E
 
-#define ST7789_PTLAR   0x30
-#define ST7789_COLMOD  0x3A
-#define ST7789_MADCTL  0x36
+#define ST7789_PTLAR 0x30
+#define ST7789_COLMOD 0x3A
+#define ST7789_MADCTL 0x36
 
-// shamelessly copied from piromoni 
+// shamelessly copied from piromoni
 #define ST7789_TEON 0x35
 #define ST7789_PORCTRL 0xB2
 #define ST7789_LCMCTRL 0xC0
@@ -91,19 +89,18 @@
 #define ST7789_GMCTRP1 0xE0
 #define ST7789_GMCTRN1 0xE1
 
-
-#define ST7789_MADCTL_MY  0x80  // Page Address Order
-#define ST7789_MADCTL_MX  0x40  // Column Address Order
-#define ST7789_MADCTL_MV  0x20  // Page/Column Order
-#define ST7789_MADCTL_ML  0x10  // Line Address Order
-#define ST7789_MADCTL_MH  0x04  // Display Data Latch Order
+#define ST7789_MADCTL_MY 0x80 // Page Address Order
+#define ST7789_MADCTL_MX 0x40 // Column Address Order
+#define ST7789_MADCTL_MV 0x20 // Page/Column Order
+#define ST7789_MADCTL_ML 0x10 // Line Address Order
+#define ST7789_MADCTL_MH 0x04 // Display Data Latch Order
 #define ST7789_MADCTL_RGB 0x00
 #define ST7789_MADCTL_BGR 0x08
 
-#define ST7789_RDID1   0xDA
-#define ST7789_RDID2   0xDB
-#define ST7789_RDID3   0xDC
-#define ST7789_RDID4   0xDD
+#define ST7789_RDID1 0xDA
+#define ST7789_RDID2 0xDB
+#define ST7789_RDID3 0xDC
+#define ST7789_RDID4 0xDD
 
 typedef struct _ST7789_t {
   spi_inst_t *spi_obj;
@@ -120,9 +117,23 @@ typedef struct _ST7789_t {
   uint st_dma;
 } ST7789_t;
 
-extern const unsigned char font[];
+extern const uint8_t font[];
 
-uint16_t swap(uint16_t color) {
+ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
+  int len = width * height;
+  ST7789_bitmap_t *bitmap =
+      calloc(sizeof(ST7789_bitmap_t) + sizeof(uint16_t) * len, 1);
+  if (bitmap == NULL) {
+    return NULL;
+  }
+  bitmap->width = width;
+  bitmap->height = height;
+  bitmap->len = len;
+
+  return bitmap;
+}
+
+static inline uint16_t swap(uint16_t color) {
   uint8_t hi = color >> 8, lo = color;
   return hi | (lo << 8);
 }
@@ -193,9 +204,9 @@ static void set_window(ST7789_t *self, uint16_t x0, uint16_t y0, uint16_t x1,
 
 static void fill_color_buffer(ST7789_t *self, uint16_t color, int length) {
   uint8_t hi = color >> 8, lo = color;
-  const int buffer_pixel_size = 240*2;
-  int chunks = length / buffer_pixel_size;
-  int rest = length % buffer_pixel_size;
+  const int buffer_pixel_size = 240 * 2;
+  const int chunks = length / buffer_pixel_size;
+  const int rest = length % buffer_pixel_size;
 
   uint8_t buffer[buffer_pixel_size * 2];
   // fill buffer with color data
@@ -246,50 +257,65 @@ void ST7789_fill_rect(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
   fill_color_buffer(self, color, w * h);
 }
 
-
-void ST7789_draw_char_bitmap( ST7789_bitmap_t *bitmap, int off_x, int off_y, unsigned char c, int16_t color, uint16_t bg,
-                            int8_t size_x, int8_t size_y) {
+void ST7789_draw_char_bitmap(ST7789_bitmap_t *bitmap, int off_x, int off_y,
+                             unsigned char c, uint16_t color, uint16_t bg,
+                             int size_x, int size_y) {
   if (off_x < 0 || off_y < 0) {
-    return;
+    abort();
   }
-  if (off_x + (size_x - 1) + ST7789_char_width > bitmap->width || off_y + (size_y - 1) +  ST7789_char_height> bitmap->height) {
-    return;
+  if (off_x + (size_x - 1) + ST7789_char_width > bitmap->width ||
+      off_y + (size_y - 1) + ST7789_char_height > bitmap->height) {
+    abort();
   }
-  
+
   if (c >= 176)
     c++; // Handle 'classic' charset behavior
 
   color = swap(color);
   bg = swap(bg);
-  
 
   for (int8_t i = 0; i < ST7789_char_width; i++) { // Char bitmap = 5 columns
     uint8_t line = font[(int)c * ST7789_char_width + i];
     for (int8_t j = 0; j < ST7789_char_height; j++, line >>= 1) {
       for (int x = 0; x < size_x; x++) {
         for (int y = 0; y < size_y; y++) {
-          bitmap->buf[((off_y + j*size_y + y) * bitmap->width) + (off_x + i*size_x + x)] = line & 1 ? color: bg;
+          int index = (off_y + j * size_y + y) * bitmap->width +
+                      (off_x + i * size_x + x);
+          if (index >= 0 && index < bitmap->len) {
+            bitmap->buf[index] = line & 1 ? color : bg;
+          }
         }
       }
     }
   }
 }
 
-void ST7789_create_str_bitmap( ST7789_bitmap_t *bitmap, const char *str, int len, int16_t color, uint16_t bg,   int8_t size_x, int8_t size_y) {
-    if (!bitmap->buf) {
-      bitmap->width = len * (ST7789_char_width + ST7789_char_space) * size_x;
-      bitmap->height =  ST7789_char_height * size_y;
-      bitmap->buf = calloc( bitmap->width * bitmap->height, sizeof(int16_t));
-    }
-    for (int i = 0; i < len; i++) {
-      ST7789_draw_char_bitmap( bitmap, i*(ST7789_char_width+ST7789_char_space)*size_x, 0, str[i], color, bg, size_x, size_y);
-    }
+ST7789_bitmap_t *ST7789_create_str_bitmap(int len, const char str[len],
+                                          int16_t color, uint16_t bg,
+                                          int8_t size_x, int8_t size_y) {
+  ST7789_bitmap_t *bitmap = ST7789_create_bitmap(
+      len * (ST7789_char_width + ST7789_char_space) * size_x,
+      ST7789_char_height * size_y);
+  if (bitmap == NULL) {
+    abort();
+  }
+  for (int i = 0; i < len; i++) {
+    ST7789_draw_char_bitmap(
+        bitmap, i * (ST7789_char_width + ST7789_char_space) * size_x, 0, str[i],
+        color, bg, size_x, size_y);
+  }
+  return bitmap;
 }
 
 void ST7789_blit_bitmap(ST7789_t *self, const ST7789_bitmap_t *bitmap,
                         int16_t x, int16_t y) {
+  if (bitmap == NULL) {
+    abort();
+  }
+
   set_window(self, x, y, x + bitmap->width - 1, y + bitmap->height - 1);
-  write_cmd(self, ST7789_RAMWR, (const uint8_t *) bitmap->buf, bitmap->width * bitmap->height * sizeof(int16_t));
+  write_cmd(self, ST7789_RAMWR, (const uint8_t *)bitmap->buf,
+            bitmap->width * bitmap->height * sizeof(uint16_t));
 }
 
 void ST7789_backlight(ST7789_t *self, uint8_t brightness) {
@@ -301,29 +327,24 @@ void ST7789_backlight(ST7789_t *self, uint8_t brightness) {
   pwm_set_gpio_level(self->backlight, value);
 }
 
-void ST7789_blit_buffer(ST7789_t *self, const uint8_t *buf, size_t buf_len,
-                        int16_t x, int16_t y, int16_t w, int16_t h) {
-  set_window(self, x, y, x + w - 1, y + h - 1);
-  write_cmd(self, ST7789_RAMWR, buf, buf_len);
-}
-
-static struct _ST7789_t st7789;
-
-ST7789_t *ST7789_spi_create(spi_inst_t *spi_obj, int16_t width, int16_t height,
+ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
                             uint cs, uint reset, uint dc, uint backlight,
                             uint tx, uint sck) {
 
-  // YUCK
-  ST7789_t *self = &st7789;
-  self->spi_obj = spi_obj;
+  ST7789_t *self = calloc(sizeof(ST7789_t), 1);
+  if (self == NULL) {
+    abort();
+  }
+  self->spi_obj = spi_inst;
   self->width = width;
   self->height = height;
-
 
   self->xstart = 0;
   // We have it rotated it 180°
   // otherwise we show wrong part of framebuffer
-  self->ystart = 320-width;  // see https://github.com/zephyrproject-rtos/zephyr/issues/32286
+  self->ystart =
+      320 -
+      width; // see https://github.com/zephyrproject-rtos/zephyr/issues/32286
 
   self->reset = reset;
   self->dc = dc;
@@ -372,7 +393,8 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_obj, int16_t width, int16_t height,
   write_cmd(self, ST7789_COLMOD, color_mode, 1);
   sleep_ms(10);
   // 180° rotated
-  const uint8_t madctl[] = {ST7789_MADCTL_MX |  ST7789_MADCTL_MY | ST7789_MADCTL_ML};
+  const uint8_t madctl[] = {ST7789_MADCTL_MX | ST7789_MADCTL_MY |
+                            ST7789_MADCTL_ML};
   write_cmd(self, ST7789_MADCTL, madctl, 1);
 
   write_cmd(self, ST7789_INVON, NULL, 0);
@@ -387,8 +409,10 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_obj, int16_t width, int16_t height,
 ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
                                  uint dc, uint backlight, uint wr_sck,
                                  uint rd_sck, uint d0) {
-  // YUCK
-  ST7789_t *self = &st7789;
+  ST7789_t *self = calloc(sizeof(ST7789_t), 1);
+  if (self == NULL) {
+    abort();
+  }
   self->spi_obj = NULL;
   self->width = width;
   self->height = height;

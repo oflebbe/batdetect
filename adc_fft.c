@@ -16,8 +16,8 @@
 
 #define SMALL_SPI 1
 
-#define WIDTH 240
-#define HEIGHT 240
+const int WIDTH = 240;
+const int HEIGHT = 240;
 
 #ifdef BREADBOARD
 #define PIN_CS 18
@@ -44,30 +44,18 @@
 // 96    = 500,000 Hz
 // 960   = 50,000 Hz
 // 9600  = 5,000 Hz
-#define CLOCK_DIV (96 * 2)
+const int CLOCK_DIV = 96 * 2;
 const int FSAMP = 500000 / 2;
 
 // Channel 0 is GPIO26
 #define CAPTURE_CHANNEL 0
 
 // because NSAMP/2 > WIDTH
-#define NSAMP 512
-
-static ST7789_t *sobj;
+const int NSAMP = 512;
 
 // globals
 dma_channel_config cfg;
 uint dma_chan;
-
-void setup();
-void sample(uint16_t *capture_buf);
-
-#define SQR(x) ((x) * (x))
-
-static uint16_t swap(uint16_t color) {
-  uint8_t hi = color >> 8, lo = color;
-  return hi | (lo << 8);
-}
 
 void start_timer() {
   systick_hw->csr = 0x5;
@@ -81,100 +69,9 @@ int stop_timer() {
   return ticks;
 }
 
-int main() {
-  uint16_t cap_buf[NSAMP];
-  kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
-  kiss_fft_cpx fft_out[NSAMP];
-  uint8_t pix[WIDTH];
-  float pow[WIDTH];
-  kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
+static inline float sqr(float x) { return x * x; }
 
-  // setup ports and outputs
-  setup();
-
-  // calculate frequencies of each bin
-
-  int freqs[WIDTH];
-
-  for (int i = 0; i < WIDTH; i++) {
-    int j = NSAMP / 2 - WIDTH + i;
-    freqs[i] = (j * FSAMP/1000) / NSAMP;
-  }
-  const int NLABELS = 4;
-  ST7789_bitmap_t label_bitmap[NLABELS];
-  memset(label_bitmap, 0, sizeof(label_bitmap));
-
-  for (int i = 0; i < NLABELS; i++) {
-    char text[4];
-    snprintf(text, sizeof(text), "%3d", freqs[(i * WIDTH) / NLABELS]);
-    ST7789_create_str_bitmap(&label_bitmap[i], text, sizeof(text), WHITE, BLACK,
-                             1, 1);
-  }
-
-  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
-  for (int i = 0; i < NLABELS; i++) {
-    ST7789_blit_bitmap(sobj, &label_bitmap[i], (i * WIDTH) / NLABELS, HEIGHT-8);
-  }
-
-  while (1) {
-    // get NSAMP samples at FSAMP
-    sample(cap_buf);
-    // fill fourier transform input
-    for (int i = 0; i < NSAMP; i++) {
-      fft_in[i] = (float)cap_buf[i];
-    }
-
-    // compute fast fourier transform
-    kiss_fftr(cfg, fft_in, fft_out);
-    // compute power and calculate max freq component
-
-    // consider the freq in WIDTH raster
-    // 12 bit ADC 0 - 4095
-    // 3V max Ampl, 3.3V reference
-    // SQR( 4095  * 256 / 2)
-    float scale = HEIGHT / 1.09383754e+11;
-    for (int i = 0; i < WIDTH; i++) {
-      int j = NSAMP / 2 - WIDTH + i;
-      float power = SQR(fft_out[j].r) + SQR(fft_out[j].i);
-
-      pix[i] = power * scale;
-    }
-
-    ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT - 10, BLACK);
-
-    for (int i = 0; i < WIDTH / 2; i++) {
-      int height = MIN((pix[i]), HEIGHT - 10);
-      ST7789_fill_rect(sobj, i*2, HEIGHT-10-height, 2, height, YELLOW);
-    }
-  }
-  // should never get here
-  kiss_fft_free(cfg);
-}
-
-void sample(uint16_t *capture_buf) {
-  adc_run(false);
-
-  dma_channel_configure(dma_chan, &cfg,
-                        capture_buf,   // dst
-                        &adc_hw->fifo, // src
-                        NSAMP,         // transfer count
-                        true           // start immediately
-  );
-#ifdef BREADBOARD
-  gpio_put(LED_PIN, 1);
-#else
-  cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-#endif
-  adc_run(true);
-  dma_channel_wait_for_finish_blocking(dma_chan);
-#ifdef BREADBOARD
-  gpio_put(LED_PIN, 0);
-#else
-  cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-#endif
-}
-
-void setup() {
+static ST7789_t *setup() {
   stdio_init_all();
 #ifdef BREADBOARD
   gpio_init(LED_PIN);
@@ -215,11 +112,106 @@ void setup() {
   // One line
 
 #ifdef SMALL_SPI
-  sobj = ST7789_spi_create(SPI_INSTANCE, WIDTH, HEIGHT, PIN_CS, PIN_RST, PIN_DC,
-                           PIN_BL, SPI_TX, SPI_CLK);
+  ST7789_t *sobj = ST7789_spi_create(SPI_INSTANCE, WIDTH, HEIGHT, PIN_CS,
+                                     PIN_RST, PIN_DC, PIN_BL, SPI_TX, SPI_CLK);
 #else
-  sobj = ST7789_parallel_create(WIDTH, HEIGHT, PIN_CS, PIN_DC, PIN_BL, PIN_WR,
-                                PIN_RD, PIN_D0);
+  ST7789_t *sobj = ST7789_parallel_create(WIDTH, HEIGHT, PIN_CS, PIN_DC, PIN_BL,
+                                          PIN_WR, PIN_RD, PIN_D0);
 #endif
   ST7789_backlight(sobj, 0xff);
+  return sobj;
+}
+
+void sample(uint16_t *capture_buf) {
+  adc_run(false);
+
+  dma_channel_configure(dma_chan, &cfg,
+                        capture_buf,   // dst
+                        &adc_hw->fifo, // src
+                        NSAMP,         // transfer count
+                        true           // start immediately
+  );
+#ifdef BREADBOARD
+  gpio_put(LED_PIN, 1);
+#else
+  cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+#endif
+  adc_run(true);
+  dma_channel_wait_for_finish_blocking(dma_chan);
+#ifdef BREADBOARD
+  gpio_put(LED_PIN, 0);
+#else
+  cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+#endif
+}
+
+int main() {
+
+  uint16_t cap_buf[NSAMP];
+  kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
+  kiss_fft_cpx fft_out[NSAMP];
+  uint8_t pix[WIDTH];
+
+  kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
+
+  // setup ports and outputs
+  ST7789_t *sobj = setup();
+
+  // calculate frequencies of each bin
+
+  int freqs[WIDTH];
+
+  for (int i = 0; i < WIDTH; i++) {
+    int j = NSAMP / 2 - WIDTH + i;
+    freqs[i] = (j * FSAMP / 1000) / NSAMP;
+  }
+  const int NLABELS = 4;
+  ST7789_bitmap_t *label_bitmap[NLABELS];
+
+  for (int i = 0; i < NLABELS; i++) {
+    char text[4];
+    snprintf(text, sizeof(text), "%3d", freqs[(i * WIDTH) / NLABELS]);
+    label_bitmap[i] =
+        ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
+  }
+
+  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
+  for (int i = 0; i < NLABELS; i++) {
+    ST7789_blit_bitmap(sobj, label_bitmap[i], (i * WIDTH) / NLABELS,
+                       HEIGHT - 8);
+  }
+
+  while (1) {
+    // get NSAMP samples at FSAMP
+    sample(cap_buf);
+    // fill fourier transform input
+    for (int i = 0; i < NSAMP; i++) {
+      fft_in[i] = (float)cap_buf[i];
+    }
+
+    // compute fast fourier transform
+    kiss_fftr(cfg, fft_in, fft_out);
+    // compute power and calculate max freq component
+
+    // consider the freq in WIDTH raster
+    // 12 bit ADC 0 - 4095
+    // 3V max Ampl, 3.3V reference
+    // SQR( 4095  * 256 / 2)
+    float scale = HEIGHT / 1.09383754e+11;
+    for (int i = 0; i < WIDTH; i++) {
+      int j = NSAMP / 2 - WIDTH + i;
+      float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
+
+      pix[i] = power * scale;
+    }
+
+    ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT - 10, BLACK);
+
+    for (int i = 0; i < WIDTH / 2; i++) {
+      int height = MIN((pix[i]), HEIGHT - 10);
+      ST7789_fill_rect(sobj, i * 2, HEIGHT - 10 - height, 2, height, YELLOW);
+    }
+  }
+  // should never get here
+  kiss_fft_free(cfg);
 }
