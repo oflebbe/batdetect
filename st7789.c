@@ -335,21 +335,9 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   if (self == NULL) {
     abort();
   }
-  self->spi_obj = spi_inst;
-  self->width = width;
-  self->height = height;
-
-  self->xstart = 0;
-  // We have it rotated it 180°
-  // otherwise we show wrong part of framebuffer
-  self->ystart =
-      320 -
-      width; // see https://github.com/zephyrproject-rtos/zephyr/issues/32286
-
-  self->reset = reset;
-  self->dc = dc;
-  self->cs = cs;
-  self->backlight = backlight;
+  *self = (ST7789_t) { .spi_obj = spi_inst, .width = width, .height = height, .xstart = 0, 
+    .ystart = 320 -  width,  // see https://github.com/zephyrproject-rtos/zephyr/issues/32286,
+    .reset = reset, .dc = dc, .cs = cs, .backlight = backlight};
 
   // init dditional pins
   gpio_init(self->cs);
@@ -413,16 +401,10 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   if (self == NULL) {
     abort();
   }
-  self->spi_obj = NULL;
-  self->width = width;
-  self->height = height;
-  self->xstart = 0;
-  self->ystart = 0;
-  self->reset = 0; // no reset pin
-
-  self->dc = dc;
-  self->cs = cs;
-  self->backlight = backlight;
+  *self = (ST7789_t) { .spi_obj = NULL, .width = width, .height = height, .xstart = 0, 
+    .ystart = 320 -  width,  // see https://github.com/zephyrproject-rtos/zephyr/issues/32286,
+   .dc = dc, .cs = cs, .backlight = backlight};
+ 
 
   gpio_init(self->cs);
   gpio_set_dir(self->cs, GPIO_OUT);
