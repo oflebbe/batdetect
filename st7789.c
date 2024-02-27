@@ -103,18 +103,18 @@
 #define ST7789_RDID4 0xDD
 
 typedef struct _ST7789_t {
-  spi_inst_t *spi_obj;
   uint width;
   uint height;
+  uint reset;
   uint xstart;
   uint ystart;
-  uint reset;
   uint dc;
   uint cs;
   uint backlight;
-  uint parallel_sm;
+  uint dma_channel;
+  spi_inst_t *spi_obj;
   PIO parallel_pio;
-  uint st_dma;
+  uint parallel_sm;
 } ST7789_t;
 
 extern const uint8_t font[];
@@ -124,11 +124,9 @@ ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
   ST7789_bitmap_t *bitmap =
       calloc(sizeof(ST7789_bitmap_t) + sizeof(uint16_t) * len, 1);
   if (bitmap == NULL) {
-    return NULL;
+    abort();
   }
-  bitmap->width = width;
-  bitmap->height = height;
-  bitmap->len = len;
+  *bitmap = (ST7789_bitmap_t){.width = width, .height = height, .len = len};
 
   return bitmap;
 }
@@ -148,9 +146,9 @@ static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
 }
 
 static void write_blocking_dma(ST7789_t *self, const uint8_t *src, size_t len) {
-  dma_channel_set_trans_count(self->st_dma, len, false);
-  dma_channel_set_read_addr(self->st_dma, src, true);
-  dma_channel_wait_for_finish_blocking(self->st_dma);
+  dma_channel_set_trans_count(self->dma_channel, len, false);
+  dma_channel_set_read_addr(self->dma_channel, src, true);
+  dma_channel_wait_for_finish_blocking(self->dma_channel);
 
   sleep_us(20); // We shouldn't overrun the ST7789
 }
@@ -328,16 +326,20 @@ void ST7789_backlight(ST7789_t *self, uint8_t brightness) {
 }
 
 ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
-                            uint cs, uint reset, uint dc, uint backlight,
-                            uint tx, uint sck) {
+                            uint rotation, uint cs, uint reset, uint dc,
+                            uint backlight, uint tx, uint sck) {
 
   ST7789_t *self = calloc(sizeof(ST7789_t), 1);
   if (self == NULL) {
     abort();
   }
-  *self = (ST7789_t) { .spi_obj = spi_inst, .width = width, .height = height, .xstart = 0, 
-    .ystart = 320 -  width,  // see https://github.com/zephyrproject-rtos/zephyr/issues/32286,
-    .reset = reset, .dc = dc, .cs = cs, .backlight = backlight};
+  *self = (ST7789_t){.spi_obj = spi_inst,
+                     .width = width,
+                     .height = height,
+                     .reset = reset,
+                     .dc = dc,
+                     .cs = cs,
+                     .backlight = backlight};
 
   // init dditional pins
   gpio_init(self->cs);
@@ -363,14 +365,15 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
 
   spi_set_format(self->spi_obj, 8, SPI_CPOL_1, SPI_CPHA_0, SPI_MSB_FIRST);
 
-  self->st_dma = dma_claim_unused_channel(true);
-  dma_channel_config dma_config = dma_channel_get_default_config(self->st_dma);
+  self->dma_channel = dma_claim_unused_channel(true);
+  dma_channel_config dma_config =
+      dma_channel_get_default_config(self->dma_channel);
   channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
   channel_config_set_irq_quiet(&dma_config, true);
 
   channel_config_set_dreq(&dma_config, spi_get_dreq(self->spi_obj, true));
-  dma_channel_set_config(self->st_dma, &dma_config, false);
-  dma_channel_set_write_addr(self->st_dma, &spi_get_hw(self->spi_obj)->dr,
+  dma_channel_set_config(self->dma_channel, &dma_config, false);
+  dma_channel_set_write_addr(self->dma_channel, &spi_get_hw(self->spi_obj)->dr,
                              false);
 
   ST7789_hard_reset(self);
@@ -380,11 +383,28 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   const uint8_t color_mode[] = {COLOR_MODE_65K | COLOR_MODE_16BIT};
   write_cmd(self, ST7789_COLMOD, color_mode, 1);
   sleep_ms(10);
-  // 180° rotated
-  const uint8_t madctl[] = {ST7789_MADCTL_MX | ST7789_MADCTL_MY |
-                            ST7789_MADCTL_ML};
-  write_cmd(self, ST7789_MADCTL, madctl, 1);
+  int ctl = 0;
+  switch (rotation) {
+  case 0:
+    self->xstart = 240 - width;
+    self->ystart = 0;
+    ctl = ST7789_MADCTL_MX | ST7789_MADCTL_MY;
+    break;
+  case 180:
+    self->xstart = 0;
+    self->ystart = 320 - width;
+    ctl = ST7789_MADCTL_MX | ST7789_MADCTL_MY | ST7789_MADCTL_ML;
+    break;
+  case 90:
+  case 270:
+    self->xstart = 240 - width;
+    self->ystart = 0;
+    ctl = ST7789_MADCTL_MX | ST7789_MADCTL_MY | ST7789_MADCTL_MV;
+    break;
+  }
 
+  const uint8_t madctl[] = {ctl};
+  write_cmd(self, ST7789_MADCTL, madctl, 1);
   write_cmd(self, ST7789_INVON, NULL, 0);
   sleep_ms(10);
   write_cmd(self, ST7789_NORON, NULL, 0);
@@ -401,10 +421,18 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   if (self == NULL) {
     abort();
   }
-  *self = (ST7789_t) { .spi_obj = NULL, .width = width, .height = height, .xstart = 0, 
-    .ystart = 320 -  width,  // see https://github.com/zephyrproject-rtos/zephyr/issues/32286,
-   .dc = dc, .cs = cs, .backlight = backlight};
- 
+  *self = (ST7789_t){
+      .spi_obj = NULL,
+      .width = width,
+      .height = height,
+      .xstart = 0,
+      .ystart =
+          320 -
+          width, // see
+                 // https://github.com/zephyrproject-rtos/zephyr/issues/32286,
+      .dc = dc,
+      .cs = cs,
+      .backlight = backlight};
 
   gpio_init(self->cs);
   gpio_set_dir(self->cs, GPIO_OUT);
@@ -459,8 +487,9 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   pio_sm_set_enabled(self->parallel_pio, self->parallel_sm, true);
 
   // Allocate, config and init an dma
-  self->st_dma = dma_claim_unused_channel(true);
-  dma_channel_config dma_config = dma_channel_get_default_config(self->st_dma);
+  self->dma_channel = dma_claim_unused_channel(true);
+  dma_channel_config dma_config =
+      dma_channel_get_default_config(self->dma_channel);
   channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
   channel_config_set_write_increment(&dma_config, false);
   channel_config_set_read_increment(&dma_config, true);
@@ -468,7 +497,7 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
 
   channel_config_set_dreq(
       &dma_config, pio_get_dreq(self->parallel_pio, self->parallel_sm, true));
-  dma_channel_configure(self->st_dma, &dma_config,
+  dma_channel_configure(self->dma_channel, &dma_config,
                         &self->parallel_pio->txf[self->parallel_sm], NULL, 0,
                         false);
 
