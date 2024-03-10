@@ -27,6 +27,11 @@ static const int ST7789_char_width = 5;
 static const int ST7789_char_space = 1;
 static const int ST7789_char_height = 8;
 
+inline uint16_t swap(uint16_t color) {
+  uint8_t hi = color >> 8, lo = color;
+  return hi | (lo << 8);
+}
+
 // allocates an ST7789_bitmap_t
 ST7789_bitmap_t *ST7789_create_bitmap(int width, int height);
 

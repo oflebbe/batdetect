@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <strings.h>
 
 #include "hardware/adc.h"
 #include "hardware/dma.h"
@@ -139,6 +140,101 @@ void sample(uint dma_chan, uint16_t *capture_buf) {
   led(0);
 }
 
+void measure(uint sample_dma_chan, kiss_fftr_cfg cfg, int len,
+             uint8_t pix[len]) {
+  uint16_t cap_buf[NSAMP];
+  kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
+
+  // get NSAMP samples at FSAMP
+  sample(sample_dma_chan, cap_buf);
+  // fill fourier transform input
+  for (int i = 0; i < NSAMP; i++) {
+    fft_in[i] = (float)cap_buf[i];
+  }
+
+  kiss_fft_cpx fft_out[NSAMP];
+  // compute fast fourier transform
+  kiss_fftr(cfg, fft_in, fft_out);
+  // compute power and calculate max freq component
+
+  // consider the freq in WIDTH raster
+  // 12 bit ADC 0 - 4095
+  // 3V max Ampl, 3.3V reference
+  // SQR( 4095  * 256 / 2)
+  float scale = HEIGHT / 1.09383754e+11;
+
+  for (int i = 0; i < len; i++) {
+    int j = NSAMP / 2 - len + i;
+    float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
+
+    pix[i] = power * scale;
+  }
+}
+
+float hue2rgb(float p, float q, float t) {
+  if (t < 0)
+    t += 1;
+  if (t > 1)
+    t -= 1;
+  if (t < (1.0 / 6))
+    return p + (q - p) * 6 * t;
+  if (t < (1. / 2.))
+    return q;
+  if (t < (2. / 3.))
+    return p + (q - p) * ((2. / 3.) - t) * 6;
+  return p;
+}
+
+uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xF8) >> 3);
+}
+
+uint16_t hslToRgb565(float h, float s, float l) {
+  float r, g, b;
+
+  if (s == 0) {
+    r = g = b = l; // achromatic
+  } else {
+
+    float q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    float p = 2 * l - q;
+
+    r = hue2rgb(p, q, h + 1 / 3.);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3.);
+  }
+
+  return color565((uint8_t)(r * 255.f), (uint8_t)(b * 255.f),
+                  (uint8_t)(g * 255.f));
+}
+
+const int label_size = 16;
+
+ST7789_bitmap_t *graphics_init(int width, int height, int ncolors,
+                               uint16_t color_table[ncolors]) {
+  for (int i = 0; i < ncolors; i++) {
+    color_table[i] = hslToRgb565(((float)i) / (float)ncolors, 1.0f, 0.5f);
+  }
+  return ST7789_create_bitmap(width, height);
+}
+
+void graphics_pixel(ST7789_bitmap_t *bitmap, int x, int y, int16_t color,
+                    int ncolors, uint16_t color_table[ncolors]) {
+  int16_t c = 0;
+  if (color > 5) {
+    c = swap(color_table[color % ncolors]);
+  }
+  bitmap->buf[y * bitmap->width + x] = c;
+}
+
+// scroll on colum to right
+void scroll(ST7789_bitmap_t *bitmap) {
+  for (int y = 0; y < bitmap->height; y++) {
+    memmove(&bitmap->buf[y * bitmap->width + 1],
+            &bitmap->buf[y * bitmap->width], 2 * (bitmap->width - 1));
+  }
+}
+
 int main() {
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
@@ -158,53 +254,32 @@ int main() {
 
   for (int i = 0; i < NLABELS; i++) {
     char text[4] = {0};
-    snprintf(text, sizeof(text), "%3d", freqs[(i * WIDTH) / NLABELS]);
+    snprintf(text, sizeof(text), "%2d", freqs[(i * WIDTH) / NLABELS]);
     label_bitmap[i] =
         ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
   }
 
   ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
   for (int i = 0; i < NLABELS; i++) {
-    ST7789_blit_bitmap(sobj, label_bitmap[i], (i * WIDTH) / NLABELS,
-                       HEIGHT - 8);
+    ST7789_blit_bitmap(sobj, label_bitmap[i], 0, (i * WIDTH) / NLABELS);
   }
 
+
+
+  const uint NCOLORS = 256;
+  uint16_t color_table[NCOLORS];
+  ST7789_bitmap_t *display = graphics_init(WIDTH-label_size, HEIGHT, NCOLORS, color_table);
   while (1) {
-    uint16_t cap_buf[NSAMP];
-    kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
+    uint8_t pix[HEIGHT];
+    measure(sample_dma_chan, cfg, HEIGHT, pix);
 
-    // get NSAMP samples at FSAMP
-    sample(sample_dma_chan, cap_buf);
-    // fill fourier transform input
-    for (int i = 0; i < NSAMP; i++) {
-      fft_in[i] = (float)cap_buf[i];
-    }
-
-    kiss_fft_cpx fft_out[NSAMP];
-    // compute fast fourier transform
-    kiss_fftr(cfg, fft_in, fft_out);
-    // compute power and calculate max freq component
-
-    // consider the freq in WIDTH raster
-    // 12 bit ADC 0 - 4095
-    // 3V max Ampl, 3.3V reference
-    // SQR( 4095  * 256 / 2)
-    float scale = HEIGHT / 1.09383754e+11;
-    uint8_t pix[WIDTH];
-    for (int i = 0; i < WIDTH; i++) {
-      int j = NSAMP / 2 - WIDTH + i;
-      float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
-
-      pix[i] = power * scale;
+    scroll(display);
+    for (int y = 0; y < HEIGHT; y++) {
+      graphics_pixel(display, 0, y, pix[y], NCOLORS, color_table);
     }
 
     // clear display
-    ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT - 10, BLACK);
-
-    for (int i = 0; i < WIDTH / 2; i++) {
-      int height = MIN((pix[i]), HEIGHT - 10);
-      ST7789_fill_rect(sobj, i * 2, HEIGHT - 10 - height, 2, height, YELLOW);
-    }
+    ST7789_blit_bitmap(sobj, display, label_size, 0);
   }
   // should never get here
   kiss_fft_free(cfg);

@@ -131,10 +131,7 @@ ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
   return bitmap;
 }
 
-static inline uint16_t swap(uint16_t color) {
-  uint8_t hi = color >> 8, lo = color;
-  return hi | (lo << 8);
-}
+
 
 static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
                                     size_t len) {
