@@ -56,6 +56,8 @@ ST7789_bitmap_t *ST7789_create_str_bitmap(int len, const char str[len],
 void ST7789_blit_bitmap(ST7789_t *self, const ST7789_bitmap_t *bitmap,
                         int16_t x, int16_t y);
 
+void ST7789_flush(const ST7789_t *self);
+
 #define min(a, b)                                                              \
   ({                                                                           \
     __typeof__(a) _a = (a);                                                    \

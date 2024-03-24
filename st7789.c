@@ -131,8 +131,6 @@ ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
   return bitmap;
 }
 
-
-
 static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
                                     size_t len) {
   while (len--) {
@@ -142,18 +140,18 @@ static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
   }
 }
 
-static void write_blocking_dma(ST7789_t *self, const uint8_t *src, size_t len) {
+static void flush(const ST7789_t *self) {
+  dma_channel_wait_for_finish_blocking(self->dma_channel);
+  sleep_us(20);
+}
+
+static void write_non_blocking_dma(ST7789_t *self, const uint8_t *src,
+                                   size_t len) {
   dma_channel_set_trans_count(self->dma_channel, len, false);
   dma_channel_set_read_addr(self->dma_channel, src, true);
-  dma_channel_wait_for_finish_blocking(self->dma_channel);
-
-  sleep_us(20); // We shouldn't overrun the ST7789
 }
 
 static void write_blocking(ST7789_t *self, const uint8_t *src, size_t len) {
-  if (len > 100) {
-    write_blocking_dma(self, src, len);
-  }
   if (self->spi_obj) {
     spi_write_blocking(self->spi_obj, src, len);
   } else {
@@ -164,6 +162,8 @@ static void write_blocking(ST7789_t *self, const uint8_t *src, size_t len) {
 static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
                                   const uint8_t *data, size_t len, int repeat,
                                   int rest) {
+  // Make sure previous transfer has ended
+  flush(self);  
   gpio_put(self->cs, 0);
   if (cmd) {
     gpio_put(self->dc, 0);
@@ -172,13 +172,18 @@ static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
   if (len > 0) {
     gpio_put(self->dc, 1);
     while (repeat-- > 0) {
-      write_blocking(self, data, len);
+      write_non_blocking_dma(self, data, len);
+      if (repeat > 0 || rest > 0) {
+        // flush only when we are going to send a next block
+        flush(self);
+      }
     }
     if (rest > 0) {
-      write_blocking(self, data, rest);
+      write_non_blocking_dma(self, data, rest);
     }
   }
-  gpio_put(self->cs, 1);
+  // Why bothering with CS (would need an interrupt handler when DMA is finished)
+  // gpio_put(self->cs, 1);
 }
 
 static void write_cmd(ST7789_t *self, uint8_t cmd, const uint8_t *data,

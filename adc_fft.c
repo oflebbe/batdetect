@@ -15,45 +15,55 @@
 #include "pico/stdlib.h"
 #include "st7789.h"
 
+#include "f_util.h"
+#include "ff.h"
+
+#ifdef PICO_W
+#include "boards/pico_w.h"
+#include "pico/cyw43_arch.h"
+#else
+#include "boards/pico.h"
+#endif
+
 #define SMALL_SPI 1
 
 const int WIDTH = 240;
 const int HEIGHT = 240;
 const int ROTATION = 180;
 
-#ifdef BREADBOARD
-#define PIN_CS 18
-#define PIN_DC 19
-#define PIN_RST 20
-#define PIN_BL 21
-#define LED_PIN 25
-#define SPI_INSTANCE spi_default
-#define SPI_TX PICO_DEFAULT_SPI_TX_PIN
-#define SPI_CLK PICO_DEFAULT_SPI_SCK_PIN
-#else
-#include "pico/cyw43_arch.h"
+const int ST7789_CS = 9;
+const int ST7789_DC = 8;
+const int ST7789_RST = 7;
+const int ST7789_BL = 6;
+#define ST7789_INSTANCE spi1
+const int ST7789_TX = 11;
+const int ST7789_CLK = 10;
 
-#define PIN_CS 9
-#define PIN_DC 8
-#define PIN_RST 7
-#define PIN_BL 6
-#define SPI_INSTANCE spi1
-#define SPI_TX 11
-#define SPI_CLK 10
-#endif
+const int SD_CS = 5;
+const int SD_TX = 3;
+const int SD_RD = 4;
+const int SD_CLK = 2;
+#define SD_INSTANCE spi0
 
 // set this to determine sample rate
 // 96    = 500,000 Hz
 // 960   = 50,000 Hz
 // 9600  = 5,000 Hz
+
 const int CLOCK_DIV = 96 * 2;
 const int FSAMP = 500000 / 2;
+
+// #define USE_FFT 1
+
+#include "adc_fft.h"
+#include "hw_config.h"
 
 // Channel 0 is GPIO26
 const int CAPTURE_CHANNEL = 0;
 
 // because NSAMP/2 > WIDTH
 const int NSAMP = 512;
+#define NSAMP2 (100000)
 
 void start_timer() {
   systick_hw->csr = 0x5;
@@ -70,18 +80,18 @@ int stop_timer() {
 static inline float sqr(float x) { return x * x; }
 
 void led(uint on) {
-#ifdef BREADBOARD
-  gpio_put(LED_PIN, on);
+#ifndef PICO_W
+  gpio_put(PICO_DEFAULT_LED_PIN, on);
 #else
   cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
 #endif
 }
 
-ST7789_t *setup(uint sample_dma_channel) {
+ST7789_t *setup(uint sample_dma_channel, uint32_t samples) {
   stdio_init_all();
-#ifdef BREADBOARD
-  gpio_init(LED_PIN);
-  gpio_set_dir(LED_PIN, GPIO_OUT);
+#ifndef PICO_W
+  gpio_init(PICO_DEFAULT_LED_PIN);
+  gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 #else
   cyw43_arch_init();
 #endif
@@ -115,12 +125,12 @@ ST7789_t *setup(uint sample_dma_channel) {
   dma_channel_set_config(sample_dma_channel, &cfg, false);
 
   dma_channel_set_read_addr(sample_dma_channel, &adc_hw->fifo, false);
-  dma_channel_set_trans_count(sample_dma_channel, NSAMP, false);
+  dma_channel_set_trans_count(sample_dma_channel, samples, false);
 
 #ifdef SMALL_SPI
-  ST7789_t *sobj =
-      ST7789_spi_create(SPI_INSTANCE, WIDTH, HEIGHT, ROTATION, PIN_CS, PIN_RST,
-                        PIN_DC, PIN_BL, SPI_TX, SPI_CLK);
+  ST7789_t *sobj = ST7789_spi_create(ST7789_INSTANCE, WIDTH, HEIGHT, ROTATION,
+                                     ST7789_CS, ST7789_RST, ST7789_DC,
+                                     ST7789_BL, ST7789_TX, ST7789_CLK);
 #else
   ST7789_t *sobj = ST7789_parallel_create(WIDTH, HEIGHT, PIN_CS, PIN_DC, PIN_BL,
                                           PIN_WR, PIN_RD, PIN_D0);
@@ -221,10 +231,21 @@ ST7789_bitmap_t *graphics_init(int width, int height, int ncolors,
 void graphics_pixel(ST7789_bitmap_t *bitmap, int x, int y, int16_t color,
                     int ncolors, uint16_t color_table[ncolors]) {
   int16_t c = 0;
-  if (color > 5) {
-    c = swap(color_table[color % ncolors]);
+  switch (color) {
+  case 0:
+    c = BLACK;
+    break;
+  case 1:
+    c = YELLOW;
+    break;
+  case 2 ... 10:
+    c = GREEN;
+    break;
+  default:
+    c = WHITE;
+    break;
   }
-  bitmap->buf[y * bitmap->width + x] = c;
+  bitmap->buf[y * bitmap->width + x] = swap(c);
 }
 
 // scroll on colum to right
@@ -235,41 +256,54 @@ void scroll(ST7789_bitmap_t *bitmap) {
   }
 }
 
-int main() {
-  kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
+uint16_t cap2_buf[NSAMP2];
 
-  const uint sample_dma_chan = dma_claim_unused_channel(true);
-  // setup ports and outputs
-  ST7789_t *sobj = setup(sample_dma_chan);
-
-  // calculate frequencies of each bin
-
+void draw_labels(ST7789_t *sobj) {
   int freqs[WIDTH];
   for (int i = 0; i < WIDTH; i++) {
     int j = NSAMP / 2 - WIDTH + i;
     freqs[i] = (j * FSAMP / 1000) / NSAMP;
   }
   const int NLABELS = 4;
-  ST7789_bitmap_t *label_bitmap[NLABELS];
+
+  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
 
   for (int i = 0; i < NLABELS; i++) {
     char text[4] = {0};
     snprintf(text, sizeof(text), "%2d", freqs[(i * WIDTH) / NLABELS]);
-    label_bitmap[i] =
+    ST7789_bitmap_t *label_bitmap =
         ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
+    ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * WIDTH) / NLABELS);
+    free(label_bitmap);
   }
+}
 
-  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
-  for (int i = 0; i < NLABELS; i++) {
-    ST7789_blit_bitmap(sobj, label_bitmap[i], 0, (i * WIDTH) / NLABELS);
-  }
+int main() {
+  const uint sample_dma_chan = dma_claim_unused_channel(true);
 
+  kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
+  // setup ports and outputs
+  ST7789_t *sobj = setup(sample_dma_chan, NSAMP2);
+#if USE_FFT
+  // calculate frequencies of each bin
+  draw_labels(sobj);
 
   const uint NCOLORS = 256;
   uint16_t color_table[NCOLORS];
-  ST7789_bitmap_t *display = graphics_init(WIDTH-label_size, HEIGHT, NCOLORS, color_table);
+  ST7789_bitmap_t *display =
+      graphics_init(WIDTH - label_size, HEIGHT, NCOLORS, color_table);
+
+#else
+  FATFS fs;
+  FRESULT fr = f_mount(&fs, "", 1);
+  if (FR_OK != fr)
+    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
+
+  int count = 0;
+#endif
   while (1) {
+#if USE_FFT
     uint8_t pix[HEIGHT];
     measure(sample_dma_chan, cfg, HEIGHT, pix);
 
@@ -280,7 +314,28 @@ int main() {
 
     // clear display
     ST7789_blit_bitmap(sobj, display, label_size, 0);
+#else
+    // get NSAMP samples at FSAMP
+    sample(sample_dma_chan, cap2_buf);
+
+    FIL fil;
+    char filename[200];
+    snprintf(filename, sizeof(filename), "sound%04d.raw", count++);
+    fr = f_open(&fil, filename, FA_WRITE | FA_CREATE_ALWAYS);
+    if (FR_OK != fr && FR_EXIST != fr)
+      panic("f_open(%s) error: %s (%d)\n", filename, FRESULT_str(fr), fr);
+    UINT written;
+    f_write(&fil, cap2_buf, NSAMP2 * sizeof(uint16_t), &written);
+    fr = f_close(&fil);
+    if (FR_OK != fr) {
+      printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
+    }
+    if (count > 20) {
+      f_unmount("");
+      abort();
+    }
+#endif
   }
+
   // should never get here
-  kiss_fft_free(cfg);
 }
