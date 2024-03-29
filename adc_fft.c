@@ -12,7 +12,9 @@
 #include "hardware/dma.h"
 #include "hardware/structs/systick.h"
 #include "kiss_fftr.h"
+#include "pico/multicore.h"
 #include "pico/stdlib.h"
+#include "pico/util/queue.h"
 #include "st7789.h"
 
 #include "f_util.h"
@@ -53,7 +55,7 @@ const int SD_CLK = 2;
 const int CLOCK_DIV = 96 * 2;
 const int FSAMP = 500000 / 2;
 
-// #define USE_FFT 1
+#define USE_FFT 1
 
 #include "adc_fft.h"
 #include "hw_config.h"
@@ -63,7 +65,6 @@ const int CAPTURE_CHANNEL = 0;
 
 // because NSAMP/2 > WIDTH
 const int NSAMP = 512;
-#define NSAMP2 (100000)
 
 void start_timer() {
   systick_hw->csr = 0x5;
@@ -144,10 +145,9 @@ void sample(uint dma_chan, uint16_t *capture_buf) {
 
   // set write address and start
   dma_channel_set_write_addr(dma_chan, capture_buf, true);
-  led(1);
+
   adc_run(true);
   dma_channel_wait_for_finish_blocking(dma_chan);
-  led(0);
 }
 
 void measure(uint sample_dma_chan, kiss_fftr_cfg cfg, int len,
@@ -170,14 +170,14 @@ void measure(uint sample_dma_chan, kiss_fftr_cfg cfg, int len,
   // consider the freq in WIDTH raster
   // 12 bit ADC 0 - 4095
   // 3V max Ampl, 3.3V reference
-  // SQR( 4095  * 256 / 2)
-  float scale = HEIGHT / 1.09383754e+11;
+  // scale is SQR( 4095  * 256 / 2)
+  // log10(scale) = 11.43892
+  // empirical lower limit log10(lower limit ) = 4
 
   for (int i = 0; i < len; i++) {
     int j = NSAMP / 2 - len + i;
     float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
-
-    pix[i] = power * scale;
+    pix[i] = (log10f(power) - 4) / (11. - 4.) * 256;
   }
 }
 
@@ -230,21 +230,8 @@ ST7789_bitmap_t *graphics_init(int width, int height, int ncolors,
 
 void graphics_pixel(ST7789_bitmap_t *bitmap, int x, int y, int16_t color,
                     int ncolors, uint16_t color_table[ncolors]) {
-  int16_t c = 0;
-  switch (color) {
-  case 0:
-    c = BLACK;
-    break;
-  case 1:
-    c = YELLOW;
-    break;
-  case 2 ... 10:
-    c = GREEN;
-    break;
-  default:
-    c = WHITE;
-    break;
-  }
+  int16_t c = color_table[color];
+
   bitmap->buf[y * bitmap->width + x] = swap(c);
 }
 
@@ -256,7 +243,7 @@ void scroll(ST7789_bitmap_t *bitmap) {
   }
 }
 
-uint16_t cap2_buf[NSAMP2];
+// uint16_t cap2_buf[NSAMP2];
 
 void draw_labels(ST7789_t *sobj) {
   int freqs[WIDTH];
@@ -274,19 +261,73 @@ void draw_labels(ST7789_t *sobj) {
     ST7789_bitmap_t *label_bitmap =
         ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
     ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * WIDTH) / NLABELS);
+    ST7789_flush(sobj);
     free(label_bitmap);
   }
 }
 
+queue_t q;
+
+void sd_writer() {
+  FATFS fs;
+  FRESULT fr = f_mount(&fs, "", 1);
+  if (FR_OK != fr)
+    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
+
+  int file_count = 0;
+  while (1) {
+    ST7789_bitmap_t *display;
+    queue_remove_blocking(&q, &display);
+    led(1);
+
+    FIL fil;
+    char str_buffer[20];
+    snprintf(str_buffer, sizeof(str_buffer), "sound%04d.565", file_count++);
+    int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
+    if (FR_OK != fr && FR_EXIST != fr)
+      panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
+
+    UINT written;
+    int res = f_write(&fil, display->buf, display->len * 2, &written);
+    if (written != display->len * 2 || res != FR_OK) {
+      panic("could not write buffer len %d, written %d, result %d\n",
+            display->len, written, res);
+    }
+    fr = f_close(&fil);
+    if (FR_OK != fr) {
+      printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
+    }
+
+    led(0);
+  }
+}
+
+void myTask();
+
+int other() {
+  queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
+  multicore_reset_core1();
+  multicore_launch_core1(&myTask);
+  sd_writer();
+
+}
+
 int main() {
-  const uint sample_dma_chan = dma_claim_unused_channel(true);
+   queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
+
+ FATFS fs;
+  FRESULT fr = f_mount(&fs, "", 1);
+  if (FR_OK != fr)
+    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
+   const uint sample_dma_chan = dma_claim_unused_channel(true);
+
 
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
   // setup ports and outputs
-  ST7789_t *sobj = setup(sample_dma_chan, NSAMP2);
-#if USE_FFT
-  // calculate frequencies of each bin
+  ST7789_t *sobj = setup(sample_dma_chan, NSAMP);
+
+  // calculate frequencies of each bin and draw legend
   draw_labels(sobj);
 
   const uint NCOLORS = 256;
@@ -294,48 +335,48 @@ int main() {
   ST7789_bitmap_t *display =
       graphics_init(WIDTH - label_size, HEIGHT, NCOLORS, color_table);
 
-#else
-  FATFS fs;
-  FRESULT fr = f_mount(&fs, "", 1);
-  if (FR_OK != fr)
-    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
 
-  int count = 0;
-#endif
+
+  int file_count = 0;
+  int row_count = 0;
   while (1) {
-#if USE_FFT
+    ST7789_bitmap_t *dis =  display;
+
     uint8_t pix[HEIGHT];
     measure(sample_dma_chan, cfg, HEIGHT, pix);
 
-    scroll(display);
+    scroll(dis);
     for (int y = 0; y < HEIGHT; y++) {
-      graphics_pixel(display, 0, y, pix[y], NCOLORS, color_table);
+      graphics_pixel(dis, 0, y, pix[y], NCOLORS, color_table);
     }
 
     // clear display
-    ST7789_blit_bitmap(sobj, display, label_size, 0);
-#else
-    // get NSAMP samples at FSAMP
-    sample(sample_dma_chan, cap2_buf);
-
+    ST7789_blit_bitmap(sobj, dis, label_size, 0);
+    if (row_count++ < display->width - 1) {
+      continue;
+    }
+    row_count = 0;
+    // queue_add_blocking(&q, &dis);
+    led(1);
     FIL fil;
-    char filename[200];
-    snprintf(filename, sizeof(filename), "sound%04d.raw", count++);
-    fr = f_open(&fil, filename, FA_WRITE | FA_CREATE_ALWAYS);
+    char str_buffer[20];
+    snprintf(str_buffer, sizeof(str_buffer), "sound%04d.565", file_count++);
+    int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
     if (FR_OK != fr && FR_EXIST != fr)
-      panic("f_open(%s) error: %s (%d)\n", filename, FRESULT_str(fr), fr);
+      panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
+
     UINT written;
-    f_write(&fil, cap2_buf, NSAMP2 * sizeof(uint16_t), &written);
+    int res = f_write(&fil, display->buf, display->len * 2, &written);
+    if (written != display->len * 2 || res != FR_OK) {
+      panic("could not write buffer len %d, written %d, result %d\n",
+            display->len, written, res);
+    }
     fr = f_close(&fil);
     if (FR_OK != fr) {
       printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
     }
-    if (count > 20) {
-      f_unmount("");
-      abort();
-    }
-#endif
+    led(0);
   }
-
+ 
   // should never get here
 }

@@ -124,7 +124,7 @@ ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
   ST7789_bitmap_t *bitmap =
       calloc(sizeof(ST7789_bitmap_t) + sizeof(uint16_t) * len, 1);
   if (bitmap == NULL) {
-    abort();
+    panic("alloc failed");
   }
   *bitmap = (ST7789_bitmap_t){.width = width, .height = height, .len = len};
 
@@ -138,11 +138,6 @@ static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
     pio_sm_put_blocking(self->parallel_pio, self->parallel_sm, p);
     asm("nop;");
   }
-}
-
-static void flush(const ST7789_t *self) {
-  dma_channel_wait_for_finish_blocking(self->dma_channel);
-  sleep_us(20);
 }
 
 static void write_non_blocking_dma(ST7789_t *self, const uint8_t *src,
@@ -163,7 +158,7 @@ static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
                                   const uint8_t *data, size_t len, int repeat,
                                   int rest) {
   // Make sure previous transfer has ended
-  flush(self);  
+  ST7789_flush( self);  
   gpio_put(self->cs, 0);
   if (cmd) {
     gpio_put(self->dc, 0);
@@ -175,7 +170,7 @@ static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
       write_non_blocking_dma(self, data, len);
       if (repeat > 0 || rest > 0) {
         // flush only when we are going to send a next block
-        flush(self);
+        ST7789_flush(self);
       }
     }
     if (rest > 0) {
@@ -232,6 +227,11 @@ static void ST7789_hard_reset(ST7789_t *self) {
 static void ST7789_soft_reset(ST7789_t *self) {
   write_cmd(self, ST7789_SWRESET, NULL, 0);
   sleep_ms(150);
+}
+
+void ST7789_flush(const ST7789_t *self) {
+  dma_channel_wait_for_finish_blocking(self->dma_channel);
+  sleep_us(1);
 }
 
 void ST7789_draw_pixel(ST7789_t *self, uint16_t x, uint16_t y, uint16_t color) {
@@ -360,7 +360,7 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   gpio_set_function(self->backlight, GPIO_FUNC_PWM);
   ST7789_backlight(self, 0); // Turn backlight off initially
 
-  spi_init(self->spi_obj, 50000000);
+  spi_init(self->spi_obj, 1500000000);
 
   gpio_set_function(tx, GPIO_FUNC_SPI);
   gpio_set_function(sck, GPIO_FUNC_SPI);

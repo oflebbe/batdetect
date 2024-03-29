@@ -36,6 +36,8 @@ target_link_libraries(adc_fft
 	hardware_pwm
 # 	pico_cyw43_arch_none
     pico_time
+	pico_util
+	pico_multicore
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 	)
 pico_set_program_name(adc_fft "batdetect")
