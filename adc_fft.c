@@ -56,8 +56,6 @@ const int CLOCK_DIV = 96 * 2;
 const int FSAMP = 500000 / 2;
 
 #define USE_FFT 1
-
-#include "adc_fft.h"
 #include "hw_config.h"
 
 // Channel 0 is GPIO26
@@ -218,8 +216,6 @@ uint16_t hslToRgb565(float h, float s, float l) {
                   (uint8_t)(g * 255.f));
 }
 
-const int label_size = 16;
-
 ST7789_bitmap_t *graphics_init(int width, int height, int ncolors,
                                uint16_t color_table[ncolors]) {
   for (int i = 0; i < ncolors; i++) {
@@ -243,30 +239,39 @@ void scroll(ST7789_bitmap_t *bitmap) {
   }
 }
 
-// uint16_t cap2_buf[NSAMP2];
-
-void draw_labels(ST7789_t *sobj) {
-  int freqs[WIDTH];
-  for (int i = 0; i < WIDTH; i++) {
-    int j = NSAMP / 2 - WIDTH + i;
+int draw_labels(ST7789_t *sobj, int num_freq) {
+  int freqs[num_freq];
+  for (int i = 0; i < num_freq; i++) {
+    int j = NSAMP / 2 - num_freq + i;
     freqs[i] = (j * FSAMP / 1000) / NSAMP;
   }
   const int NLABELS = 4;
 
-  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
-
   for (int i = 0; i < NLABELS; i++) {
     char text[4] = {0};
-    snprintf(text, sizeof(text), "%2d", freqs[(i * WIDTH) / NLABELS]);
+    snprintf(text, sizeof(text), "%2d", freqs[(i * num_freq) / NLABELS]);
     ST7789_bitmap_t *label_bitmap =
         ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
-    ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * WIDTH) / NLABELS);
+    ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * num_freq) / NLABELS);
     ST7789_flush(sobj);
     free(label_bitmap);
   }
+  return 2 * 8; // because of %2d an 1 scale
+}
+
+void draw_counter(ST7789_t *sobj, int counter) {
+  char text[5] = {0};
+  snprintf(text, sizeof(text), "%4d", counter);
+  ST7789_bitmap_t *label_bitmap =
+      ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
+  ST7789_blit_bitmap(sobj, label_bitmap, 200, HEIGHT-8);
+  ST7789_flush(sobj);
+  free(label_bitmap);
 }
 
 queue_t q;
+
+int file_count;
 
 void sd_writer() {
   FATFS fs;
@@ -274,7 +279,18 @@ void sd_writer() {
   if (FR_OK != fr)
     panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
 
-  int file_count = 0;
+  int search = 0;
+  for (; search < 100; search++) {
+    char str_buffer[20];
+    snprintf(str_buffer, sizeof(str_buffer), "sound%04d.565", search * 100);
+    FILINFO fi;
+    FRESULT fr = f_stat(str_buffer, &fi);
+    if (fr == FR_NO_FILE) {
+      break;
+    }
+  }
+
+  file_count = (search % 100) * 100;
   while (1) {
     ST7789_bitmap_t *display;
     queue_remove_blocking(&q, &display);
@@ -302,81 +318,60 @@ void sd_writer() {
   }
 }
 
-void myTask();
-
-int other() {
-  queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
-  multicore_reset_core1();
-  multicore_launch_core1(&myTask);
-  sd_writer();
-
-}
-
 int main() {
-   queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
+  queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
 
- FATFS fs;
-  FRESULT fr = f_mount(&fs, "", 1);
-  if (FR_OK != fr)
-    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
-   const uint sample_dma_chan = dma_claim_unused_channel(true);
-
+  multicore_reset_core1();
+  multicore_launch_core1(&sd_writer);
+  const uint sample_dma_chan = dma_claim_unused_channel(true);
 
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
   // setup ports and outputs
   ST7789_t *sobj = setup(sample_dma_chan, NSAMP);
 
+  ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
   // calculate frequencies of each bin and draw legend
-  draw_labels(sobj);
+
+  const int counter_height = 8;
+  const int num_freq = HEIGHT - counter_height;
+  const int label_size = draw_labels(sobj, num_freq);
 
   const uint NCOLORS = 256;
   uint16_t color_table[NCOLORS];
   ST7789_bitmap_t *display =
-      graphics_init(WIDTH - label_size, HEIGHT, NCOLORS, color_table);
+      graphics_init(WIDTH - label_size, HEIGHT  - 8, NCOLORS, color_table);
+  ST7789_bitmap_t *display2 =
+      graphics_init(WIDTH - label_size, HEIGHT - 8 , NCOLORS, color_table);
 
-
-
-  int file_count = 0;
   int row_count = 0;
+  bool flip = true;
+  draw_counter(sobj, file_count);
   while (1) {
-    ST7789_bitmap_t *dis =  display;
-
+    ST7789_bitmap_t *dis = flip ? display : display2;
     uint8_t pix[HEIGHT];
-    measure(sample_dma_chan, cfg, HEIGHT, pix);
+    measure(sample_dma_chan, cfg, HEIGHT - counter_height, pix);
 
     scroll(dis);
-    for (int y = 0; y < HEIGHT; y++) {
+    for (int y = 0; y < HEIGHT - counter_height; y++) {
       graphics_pixel(dis, 0, y, pix[y], NCOLORS, color_table);
     }
 
-    // clear display
+    // draw audiogram display
     ST7789_blit_bitmap(sobj, dis, label_size, 0);
+
     if (row_count++ < display->width - 1) {
       continue;
     }
+    // full redraw, trigger SD Card write
     row_count = 0;
-    // queue_add_blocking(&q, &dis);
-    led(1);
-    FIL fil;
-    char str_buffer[20];
-    snprintf(str_buffer, sizeof(str_buffer), "sound%04d.565", file_count++);
-    int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
-    if (FR_OK != fr && FR_EXIST != fr)
-      panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
-
-    UINT written;
-    int res = f_write(&fil, display->buf, display->len * 2, &written);
-    if (written != display->len * 2 || res != FR_OK) {
-      panic("could not write buffer len %d, written %d, result %d\n",
-            display->len, written, res);
-    }
-    fr = f_close(&fil);
-    if (FR_OK != fr) {
-      printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
-    }
-    led(0);
+    draw_counter(sobj, file_count+1);
+    queue_add_blocking(&q, &dis);
+    // we need the old display around for the other core to write out
+    ST7789_bitmap_t *new_dis = !flip ? display : display2;
+    memcpy(new_dis->buf, dis->buf, dis->len * 2);
+    flip = !flip;
   }
- 
+
   // should never get here
 }

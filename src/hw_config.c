@@ -26,7 +26,8 @@ static sd_sdio_if_t sdio_if = {
     .D0_gpio = 2,
     .SDIO_PIO = pio0,
     .CMD_gpio = 1,
-    .baud_rate = 170 * 1000 * 1000 / 10
+    .baud_rate = 170 * 1000 * 1000 / 10,
+    .use_exclusive_DMA_IRQ_handler = true
 };
 
 
