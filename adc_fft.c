@@ -124,7 +124,6 @@ ST7789_t *setup(uint sample_dma_channel) {
   dma_channel_set_config(sample_dma_channel, &cfg, false);
 
   dma_channel_set_read_addr(sample_dma_channel, &adc_hw->fifo, false);
-  
 
 #ifdef SMALL_SPI
   ST7789_t *sobj = ST7789_spi_create(ST7789_INSTANCE, WIDTH, HEIGHT, ROTATION,
@@ -150,34 +149,48 @@ void sample(uint dma_chan, int samples, uint16_t capture_buf[samples]) {
   dma_channel_wait_for_finish_blocking(dma_chan);
 }
 
+void graphics_pixel(ST7789_bitmap_t *bitmap, int x, int y, int16_t color,
+                    int ncolors, uint16_t color_table[ncolors]) {
+  int16_t c = color_table[color];
+
+  bitmap->buf[y * bitmap->width + x] = swap(c);
+}
+
 void measure(uint sample_dma_chan, int NSAMP, const float window[NSAMP],
-             kiss_fftr_cfg cfg, int len, uint8_t pix[len]) {
-  uint16_t cap_buf[NSAMP];
-  kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
+             kiss_fftr_cfg cfg, int dis_width, int dis_height, int ncolors,
+             uint16_t color_table[ncolors], ST7789_bitmap_t *dis) {
+  int factor = 100;
+  uint16_t cap_buf[NSAMP * factor];
 
   // get NSAMP samples at FSAMP
-  sample(sample_dma_chan, NSAMP, cap_buf);
-  // fill fourier transform input
-  for (int i = 0; i < NSAMP; i++) {
-    fft_in[i] = (float)cap_buf[i] * window[i];
-  }
+  sample(sample_dma_chan, NSAMP * factor, cap_buf);
+  for (int column = 0; column < dis_width; column++) {
+    kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
+    // fill fourier transform input
+    for (int i = 0; i < NSAMP; i++) {
+      fft_in[i] = (float)cap_buf[i + (column * (NSAMP * factor)) / dis_width] *
+                  window[i];
+    }
 
-  kiss_fft_cpx fft_out[NSAMP];
-  // compute fast fourier transform
-  kiss_fftr(cfg, fft_in, fft_out);
-  // compute power and calculate max freq component
+    kiss_fft_cpx fft_out[NSAMP];
+    // compute fast fourier transform
+    kiss_fftr(cfg, fft_in, fft_out);
+    // compute power and calculate max freq component
 
-  // consider the freq in WIDTH raster
-  // 12 bit ADC 0 - 4095
-  // 3V max Ampl, 3.3V reference
-  // scale is SQR( 4095  * 256 / 2)
-  // log10(scale) = 11.43892
-  // empirical lower limit log10(lower limit ) = 4
+    // consider the freq in WIDTH raster
+    // 12 bit ADC 0 - 4095
+    // 3V max Ampl, 3.3V reference
+    // scale is SQR( 4095  * 256 / 2)
+    // log10(scale) = 11.43892
+    // empirical lower limit log10(lower limit ) = 4
 
-  for (int i = 0; i < len; i++) {
-    int j = NSAMP / 2 - len + i;
-    float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
-    pix[i] = (log10f(power) - 4) / (11. - 4.) * 256;
+    for (int y = 0; y < dis_height; y++) {
+      int j = NSAMP / 2 - dis_height + y;
+      float power = sqr(fft_out[j].r) + sqr(fft_out[j].i);
+      int16_t pix = (log10f(power) - 4) / (11. - 4.) * 256;
+
+      graphics_pixel(dis, column, y, pix, ncolors, color_table);
+    }
   }
 }
 
@@ -224,13 +237,6 @@ ST7789_bitmap_t *graphics_init(int width, int height, int ncolors,
     color_table[i] = hslToRgb565(((float)i) / (float)ncolors, 1.0f, 0.5f);
   }
   return ST7789_create_bitmap(width, height);
-}
-
-void graphics_pixel(ST7789_bitmap_t *bitmap, int x, int y, int16_t color,
-                    int ncolors, uint16_t color_table[ncolors]) {
-  int16_t c = color_table[color];
-
-  bitmap->buf[y * bitmap->width + x] = swap(c);
 }
 
 // scroll on colum to right
@@ -363,8 +369,6 @@ int main() {
   uint16_t color_table[NCOLORS];
   ST7789_bitmap_t *display =
       graphics_init(WIDTH - label_size, HEIGHT - 8, NCOLORS, color_table);
-  ST7789_bitmap_t *display2 =
-      graphics_init(WIDTH - label_size, HEIGHT - 8, NCOLORS, color_table);
 
   int row_count = 0;
   bool flip = true;
@@ -374,30 +378,16 @@ int main() {
   init_hamming(NSAMP, hamming);
 
   while (1) {
-    ST7789_bitmap_t *dis = flip ? display : display2;
-    uint8_t pix[HEIGHT];
-    measure(sample_dma_chan, NSAMP, hamming, cfg, HEIGHT - counter_height, pix);
 
-    scroll(dis);
-    for (int y = 0; y < HEIGHT - counter_height; y++) {
-      graphics_pixel(dis, 0, y, pix[y], NCOLORS, color_table);
-    }
+    measure(sample_dma_chan, NSAMP, hamming, cfg, WIDTH - label_size,
+            HEIGHT - counter_height, NCOLORS, color_table, display);
 
     // draw audiogram display
-    ST7789_blit_bitmap(sobj, dis, label_size, 0);
+    draw_counter(sobj, file_count);
+    ST7789_blit_bitmap(sobj, display, label_size, 0);
 
-    if (row_count++ < display->width - 1) {
-      continue;
-    }
-    // full redraw, trigger SD Card write
-    row_count = 0;
-    draw_counter(sobj, file_count + 1);
     // queue_add_blocking(&q, &dis);
-    sd_write(&fs, file_count++, dis);
-    // we need the old display around for the other core to write out
-    ST7789_bitmap_t *new_dis = !flip ? display : display2;
-    memcpy(new_dis->buf, dis->buf, dis->len * 2);
-    flip = !flip;
+    sd_write(&fs, file_count++, display);
   }
 
   // should never get here
