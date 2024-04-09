@@ -10,7 +10,7 @@ project(adc_fft_project C CXX ASM)
 
 pico_sdk_init()
 
-add_compile_options("-Wall" )
+add_compile_options("-Wall" "-fanalyzer" )
 
 # add_compile_definitions(PICO_W)
 

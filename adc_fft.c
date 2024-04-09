@@ -86,7 +86,7 @@ void led(uint on) {
 #endif
 }
 
-ST7789_t *setup(uint sample_dma_channel, uint32_t samples) {
+ST7789_t *setup(uint sample_dma_channel) {
   stdio_init_all();
 #ifndef PICO_W
   gpio_init(PICO_DEFAULT_LED_PIN);
@@ -124,7 +124,7 @@ ST7789_t *setup(uint sample_dma_channel, uint32_t samples) {
   dma_channel_set_config(sample_dma_channel, &cfg, false);
 
   dma_channel_set_read_addr(sample_dma_channel, &adc_hw->fifo, false);
-  dma_channel_set_trans_count(sample_dma_channel, samples, false);
+  
 
 #ifdef SMALL_SPI
   ST7789_t *sobj = ST7789_spi_create(ST7789_INSTANCE, WIDTH, HEIGHT, ROTATION,
@@ -138,9 +138,11 @@ ST7789_t *setup(uint sample_dma_channel, uint32_t samples) {
   return sobj;
 }
 
-void sample(uint dma_chan, uint16_t *capture_buf) {
+void sample(uint dma_chan, int samples, uint16_t capture_buf[samples]) {
   adc_run(false);
 
+  // set number of samples (2 bytes each) to read
+  dma_channel_set_trans_count(dma_chan, samples, false);
   // set write address and start
   dma_channel_set_write_addr(dma_chan, capture_buf, true);
 
@@ -148,16 +150,16 @@ void sample(uint dma_chan, uint16_t *capture_buf) {
   dma_channel_wait_for_finish_blocking(dma_chan);
 }
 
-void measure(uint sample_dma_chan, kiss_fftr_cfg cfg, int len,
-             uint8_t pix[len]) {
+void measure(uint sample_dma_chan, int NSAMP, const float window[NSAMP],
+             kiss_fftr_cfg cfg, int len, uint8_t pix[len]) {
   uint16_t cap_buf[NSAMP];
   kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
 
   // get NSAMP samples at FSAMP
-  sample(sample_dma_chan, cap_buf);
+  sample(sample_dma_chan, NSAMP, cap_buf);
   // fill fourier transform input
   for (int i = 0; i < NSAMP; i++) {
-    fft_in[i] = (float)cap_buf[i];
+    fft_in[i] = (float)cap_buf[i] * window[i];
   }
 
   kiss_fft_cpx fft_out[NSAMP];
@@ -239,6 +241,14 @@ void scroll(ST7789_bitmap_t *bitmap) {
   }
 }
 
+void init_hamming(int len, float window[len]) {
+
+  float a0 = 25. / 46.;
+  for (int i = 0; i < len; i++) {
+    window[i] = a0 - (1.0 - a0) * cosf((M_TWOPI * i) / len);
+  }
+}
+
 int draw_labels(ST7789_t *sobj, int num_freq) {
   int freqs[num_freq];
   for (int i = 0; i < num_freq; i++) {
@@ -264,7 +274,7 @@ void draw_counter(ST7789_t *sobj, int counter) {
   snprintf(text, sizeof(text), "%4d", counter);
   ST7789_bitmap_t *label_bitmap =
       ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
-  ST7789_blit_bitmap(sobj, label_bitmap, 200, HEIGHT-8);
+  ST7789_blit_bitmap(sobj, label_bitmap, 200, HEIGHT - 8);
   ST7789_flush(sobj);
   free(label_bitmap);
 }
@@ -273,12 +283,7 @@ queue_t q;
 
 int file_count;
 
-void sd_writer() {
-  FATFS fs;
-  FRESULT fr = f_mount(&fs, "", 1);
-  if (FR_OK != fr)
-    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
-
+int sd_card_search(FATFS *fs) {
   int search = 0;
   for (; search < 100; search++) {
     char str_buffer[20];
@@ -289,46 +294,63 @@ void sd_writer() {
       break;
     }
   }
-
-  file_count = (search % 100) * 100;
-  while (1) {
-    ST7789_bitmap_t *display;
-    queue_remove_blocking(&q, &display);
-    led(1);
-
-    FIL fil;
-    char str_buffer[20];
-    snprintf(str_buffer, sizeof(str_buffer), "sound%04d.565", file_count++);
-    int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
-    if (FR_OK != fr && FR_EXIST != fr)
-      panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
-
-    UINT written;
-    int res = f_write(&fil, display->buf, display->len * 2, &written);
-    if (written != display->len * 2 || res != FR_OK) {
-      panic("could not write buffer len %d, written %d, result %d\n",
-            display->len, written, res);
-    }
-    fr = f_close(&fil);
-    if (FR_OK != fr) {
-      printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
-    }
-
-    led(0);
-  }
+  return search;
 }
+
+void sd_write(FATFS *fs, int file_count, const ST7789_bitmap_t *display) {
+  FIL fil;
+
+  const int buf_len = snprintf(NULL, 0, "sound%04d.565", file_count);
+  char str_buffer[buf_len];
+  snprintf(str_buffer, buf_len, "sound%04d.565", file_count);
+  led(1);
+  int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
+  if (FR_OK != fr && FR_EXIST != fr)
+    panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
+
+  UINT written;
+  int res = f_write(&fil, display->buf, display->len * 2, &written);
+  if (written != display->len * 2 || res != FR_OK) {
+    panic("could not write buffer len %d, written %d, result %d\n",
+          display->len, written, res);
+  }
+  fr = f_close(&fil);
+  if (FR_OK != fr) {
+    printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
+  }
+
+  led(0);
+}
+
+/*
+void sd_writer() {
+while (1) {
+  ST7789_bitmap_t *display;
+  queue_remove_blocking(&q, &display);
+  int file_count, const ST7789_bitmap_t *display)
+  sd_write
+
+}*/
 
 int main() {
   queue_init(&q, sizeof(ST7789_bitmap_t *), 1);
 
+  FATFS fs;
+  FRESULT fr = f_mount(&fs, "", 1);
+  if (FR_OK != fr)
+    panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
+
+  const int search = sd_card_search(&fs);
+  int file_count = (search % 100) * 100;
+
   multicore_reset_core1();
-  multicore_launch_core1(&sd_writer);
+  // multicore_launch_core1(&sd_writer);
   const uint sample_dma_chan = dma_claim_unused_channel(true);
 
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
   // setup ports and outputs
-  ST7789_t *sobj = setup(sample_dma_chan, NSAMP);
+  ST7789_t *sobj = setup(sample_dma_chan);
 
   ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
   // calculate frequencies of each bin and draw legend
@@ -340,17 +362,21 @@ int main() {
   const uint NCOLORS = 256;
   uint16_t color_table[NCOLORS];
   ST7789_bitmap_t *display =
-      graphics_init(WIDTH - label_size, HEIGHT  - 8, NCOLORS, color_table);
+      graphics_init(WIDTH - label_size, HEIGHT - 8, NCOLORS, color_table);
   ST7789_bitmap_t *display2 =
-      graphics_init(WIDTH - label_size, HEIGHT - 8 , NCOLORS, color_table);
+      graphics_init(WIDTH - label_size, HEIGHT - 8, NCOLORS, color_table);
 
   int row_count = 0;
   bool flip = true;
   draw_counter(sobj, file_count);
+
+  float hamming[NSAMP];
+  init_hamming(NSAMP, hamming);
+
   while (1) {
     ST7789_bitmap_t *dis = flip ? display : display2;
     uint8_t pix[HEIGHT];
-    measure(sample_dma_chan, cfg, HEIGHT - counter_height, pix);
+    measure(sample_dma_chan, NSAMP, hamming, cfg, HEIGHT - counter_height, pix);
 
     scroll(dis);
     for (int y = 0; y < HEIGHT - counter_height; y++) {
@@ -365,8 +391,9 @@ int main() {
     }
     // full redraw, trigger SD Card write
     row_count = 0;
-    draw_counter(sobj, file_count+1);
-    queue_add_blocking(&q, &dis);
+    draw_counter(sobj, file_count + 1);
+    // queue_add_blocking(&q, &dis);
+    sd_write(&fs, file_count++, dis);
     // we need the old display around for the other core to write out
     ST7789_bitmap_t *new_dis = !flip ? display : display2;
     memcpy(new_dis->buf, dis->buf, dis->len * 2);
