@@ -112,9 +112,14 @@ typedef struct _ST7789_t {
   uint cs;
   uint backlight;
   uint dma_channel;
-  spi_inst_t *spi_obj;
-  PIO parallel_pio;
-  uint parallel_sm;
+  bool is_spi; // is_spi == true -> spi_obj valid , otherwise parallel_pio and parallel_sm
+  union {
+    spi_inst_t *spi_obj;
+    struct {
+      PIO parallel_pio;
+      uint parallel_sm;
+    };
+  };
 } ST7789_t;
 
 extern const uint8_t font[];
@@ -131,90 +136,91 @@ ST7789_bitmap_t *ST7789_create_bitmap(int width, int height) {
   return bitmap;
 }
 
-static void write_blocking_parallel(ST7789_t *self, const uint8_t *src,
-                                    size_t len) {
-  while (len--) {
-    uint32_t p = *src++ << 24;
+static void write_blocking_parallel(ST7789_t *self, unsigned int len, const uint8_t src[len]) {
+  for (int i = 0; i < len; i++) {
+    uint32_t p = src[i] << 24;
     pio_sm_put_blocking(self->parallel_pio, self->parallel_sm, p);
     asm("nop;");
   }
 }
 
-static void write_non_blocking_dma(ST7789_t *self, const uint8_t *src,
-                                   size_t len) {
+static void write_non_blocking_dma(ST7789_t *self, unsigned int len, const uint8_t src[len]) {
   dma_channel_set_trans_count(self->dma_channel, len, false);
   dma_channel_set_read_addr(self->dma_channel, src, true);
 }
 
-static void write_blocking(ST7789_t *self, const uint8_t *src, size_t len) {
-  if (self->spi_obj) {
+static void write_blocking(ST7789_t * self, unsigned int len, const uint8_t src[len]) {
+  if (self->is_spi) {
     spi_write_blocking(self->spi_obj, src, len);
   } else {
-    write_blocking_parallel(self, src, len);
+    write_blocking_parallel(self, len, src);
   }
 }
 
 static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
-                                  const uint8_t *data, size_t len, int repeat,
+                                  size_t len, const uint8_t data[len],  int repeat,
                                   int rest) {
   // Make sure previous transfer has ended
-  ST7789_flush( self);  
+  ST7789_flush(self);
   gpio_put(self->cs, 0);
   if (cmd) {
     gpio_put(self->dc, 0);
-    write_blocking(self, &cmd, 1);
+    write_blocking(self, 1, &cmd);
   }
   if (len > 0) {
     gpio_put(self->dc, 1);
     while (repeat-- > 0) {
-      write_non_blocking_dma(self, data, len);
+      write_non_blocking_dma(self, len, data);
       if (repeat > 0 || rest > 0) {
         // flush only when we are going to send a next block
         ST7789_flush(self);
       }
     }
     if (rest > 0) {
-      write_non_blocking_dma(self, data, rest);
+      write_non_blocking_dma(self, rest, data);
     }
   }
-  // Why bothering with CS (would need an interrupt handler when DMA is finished)
-  // gpio_put(self->cs, 1);
+  // Why bothering with CS (would need an interrupt handler when DMA is
+  // finished) gpio_put(self->cs, 1);
 }
 
 static void write_cmd(ST7789_t *self, uint8_t cmd, const uint8_t *data,
                       size_t len) {
-  write_cmd_repeat_rest(self, cmd, data, len, 1, 0);
+  write_cmd_repeat_rest(self, cmd, len, data, 1, 0);
 }
 
 static void set_window(ST7789_t *self, uint16_t x0, uint16_t y0, uint16_t x1,
                        uint16_t y1) {
 
-  uint8_t bufx[4] = {(x0 + self->xstart) >> 8, (x0 + self->xstart) & 0xFF,
-                     (x1 + self->xstart) >> 8, (x1 + self->xstart) & 0xFF};
-  uint8_t bufy[4] = {(y0 + self->ystart) >> 8, (y0 + self->ystart) & 0xFF,
-                     (y1 + self->ystart) >> 8, (y1 + self->ystart) & 0xFF};
+  const uint8_t bufx[4] = {(x0 + self->xstart) >> 8, (x0 + self->xstart) & 0xFF,
+                           (x1 + self->xstart) >> 8,
+                           (x1 + self->xstart) & 0xFF};
+  const uint8_t bufy[4] = {(y0 + self->ystart) >> 8, (y0 + self->ystart) & 0xFF,
+                           (y1 + self->ystart) >> 8,
+                           (y1 + self->ystart) & 0xFF};
   write_cmd(self, ST7789_CASET, bufx, 4);
   write_cmd(self, ST7789_RASET, bufy, 4);
 }
 
 static void fill_color_buffer(ST7789_t *self, uint16_t color, int length) {
   uint8_t hi = color >> 8, lo = color;
-  const int buffer_pixel_size = 240 * 2;
-  const int chunks = length / buffer_pixel_size;
-  const int rest = length % buffer_pixel_size;
+  const int buffer_pixel_num = 240;
+  const int chunks = length / buffer_pixel_num;
+  const int rest = length % buffer_pixel_num;
+  const int buffer_num = min( length, buffer_pixel_num);
 
-  uint8_t buffer[buffer_pixel_size * 2];
+  uint8_t buffer[buffer_num*2];
   // fill buffer with color data
-  for (int i = 0; i < length && i < buffer_pixel_size; i++) {
+  for (int i = 0; i < buffer_num; i++) {
     buffer[i * 2] = hi;
     buffer[i * 2 + 1] = lo;
   }
 
-  write_cmd_repeat_rest(self, ST7789_RAMWR, buffer, buffer_pixel_size * 2,
+  write_cmd_repeat_rest(self, ST7789_RAMWR, buffer_num * 2, buffer, 
                         chunks, rest * 2);
 }
 
-static void ST7789_hard_reset(ST7789_t *self) {
+static void ST7789_hard_reset( ST7789_t *self) {
   gpio_put(self->reset, 1);
   sleep_ms(50);
   gpio_put(self->reset, 0);
@@ -229,7 +235,7 @@ static void ST7789_soft_reset(ST7789_t *self) {
   sleep_ms(150);
 }
 
-void ST7789_flush(const ST7789_t *self) {
+void ST7789_flush(ST7789_t *self) {
   dma_channel_wait_for_finish_blocking(self->dma_channel);
   sleep_us(1);
 }
@@ -283,16 +289,16 @@ void ST7789_draw_char_bitmap(ST7789_bitmap_t *bitmap, int off_x, int off_y,
                       (off_x + i * size_x + x);
           if (index >= 0 && index < bitmap->len) {
             bitmap->buf[index] = line & 1 ? color : bg;
-          }
+          } 
         }
       }
     }
   }
 }
 
-ST7789_bitmap_t *ST7789_create_str_bitmap(int len, const char str[len],
-                                          int16_t color, uint16_t bg,
-                                          int8_t size_x, int8_t size_y) {
+const ST7789_bitmap_t *ST7789_create_str_bitmap(int len, const char str[len],
+                                                int16_t color, uint16_t bg,
+                                                int8_t size_x, int8_t size_y) {
   ST7789_bitmap_t *bitmap = ST7789_create_bitmap(
       len * (ST7789_char_width + ST7789_char_space) * size_x,
       ST7789_char_height * size_y);
@@ -321,8 +327,8 @@ void ST7789_blit_bitmap(ST7789_t *self, const ST7789_bitmap_t *bitmap,
 void ST7789_backlight(ST7789_t *self, uint8_t brightness) {
   // gamma correct the provided 0-255 brightness value onto a
   // 0-65535 range for the pwm counter
-  float gamma = 2.8;
-  uint16_t value =
+  const float gamma = 2.8;
+  const uint16_t value =
       (uint16_t)(powf((float)(brightness) / 255.0f, gamma) * 65535.0f + 0.5f);
   pwm_set_gpio_level(self->backlight, value);
 }
@@ -335,7 +341,8 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   if (self == NULL) {
     abort();
   }
-  *self = (ST7789_t){.spi_obj = spi_inst,
+  *self = (ST7789_t){.is_spi = true,
+                     .spi_obj = spi_inst,
                      .width = width,
                      .height = height,
                      .reset = reset,
@@ -424,7 +431,7 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
     abort();
   }
   *self = (ST7789_t){
-      .spi_obj = NULL,
+      .is_spi = false,
       .width = width,
       .height = height,
       .xstart = 0,
@@ -434,7 +441,10 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
                  // https://github.com/zephyrproject-rtos/zephyr/issues/32286,
       .dc = dc,
       .cs = cs,
-      .backlight = backlight};
+      .backlight = backlight,
+      .parallel_pio = pio1,
+      .parallel_sm =  pio_claim_unused_sm(pio1, true)
+      };
 
   gpio_init(self->cs);
   gpio_set_dir(self->cs, GPIO_OUT);
@@ -449,9 +459,7 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   gpio_set_function(self->backlight, GPIO_FUNC_PWM);
   ST7789_backlight(self, 0); // Turn backlight off initially
 
-  self->parallel_pio = pio1;
-  self->parallel_sm = pio_claim_unused_sm(self->parallel_pio, true);
-  uint parallel_offset =
+  const uint parallel_offset =
       pio_add_program(self->parallel_pio, &st7789_parallel_program);
   pio_gpio_init(self->parallel_pio, wr_sck);
 
