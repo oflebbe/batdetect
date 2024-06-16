@@ -77,12 +77,12 @@ const int NUM_SAMPLES = NSAMP * FACTOR;
 queue_t capture_queue;
 queue_t display_queue;
 
-void start_timer() {
+void start_timer(void) {
   systick_hw->csr = 0x5;
   systick_hw->rvr = 0x00FFFFFF;
 }
 
-int stop_timer() {
+int stop_timer(void) {
   const int ticks = 0x00FFFFFF - systick_hw->cvr;
   systick_hw->csr = 0x0;
   systick_hw->rvr = 0x00FFFFFF;
@@ -215,7 +215,7 @@ uint16_t hslToRgb565(float h, float s, float l) {
 static void init_hamming(int len, float window[len]) {
   const float a0 = 25. / 46.;
   for (int i = 0; i < len; i++) {
-    window[i] = a0 - (1.0 - a0) * cosf((M_TWOPI * i) / len);
+    window[i] = a0 - (1.0 - a0) * cosf((M_TWOPI * i) / (len-1));
   }
 }
 
@@ -301,7 +301,7 @@ void sd_write(FATFS *fs, int file_count, int size, uint16_t cap_buf[size]) {
   led(0);
 }
 
-void worker_display() {
+void worker_display(void) {
   // create hamming window for FFT
   // NSAMP entries
 
