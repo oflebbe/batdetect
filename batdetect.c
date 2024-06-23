@@ -47,12 +47,6 @@ const int ST7789_BL = 6;
 const int ST7789_TX = 11;
 const int ST7789_CLK = 10;
 
-const int SD_CS = 5;
-const int SD_TX = 3;
-const int SD_RD = 4;
-const int SD_CLK = 2;
-#define SD_INSTANCE spi0
-
 // set this to determine sample rate
 // 96    = 500,000 Hz
 // 960   = 50,000 Hz
