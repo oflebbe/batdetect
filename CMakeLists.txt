@@ -40,6 +40,11 @@ target_link_libraries(adc_fft
 	pico_multicore
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 	)
+
+	#pico_define_boot_stage2(slower_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
+	#target_compile_definitions(slower_boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=4)
+	#pico_set_boot_stage2( adc_fft slower_boot2)
+
 pico_set_program_name(adc_fft "batdetect")
 pico_set_program_version(adc_fft "0.1")
 

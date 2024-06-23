@@ -369,6 +369,7 @@ void worker_display(void) {
 }
 
 int main() {
+  // set_sys_clock_khz(250000, true);
   // Queue initialization
   queue_init(&capture_queue, sizeof(uint16_t *), 1);
   queue_init(&display_queue, sizeof(ST7789_bitmap_t *), 1);
