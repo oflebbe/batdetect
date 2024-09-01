@@ -158,7 +158,7 @@ static void write_blocking(ST7789_t * self, unsigned int len, const uint8_t src[
 }
 
 static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
-                                  size_t len, const uint8_t data[len],  int repeat,
+                                  size_t len, const uint8_t data[len], int repeat,
                                   int rest) {
   // Make sure previous transfer has ended
   ST7789_flush(self);
@@ -202,14 +202,14 @@ static void set_window(ST7789_t *self, uint16_t x0, uint16_t y0, uint16_t x1,
   write_cmd(self, ST7789_RASET, bufy, 4);
 }
 
+#define BUFFER_PIXEL_NUM 32
+static uint8_t buffer[BUFFER_PIXEL_NUM*2];
+
 static void fill_color_buffer(ST7789_t *self, uint16_t color, int length) {
   uint8_t hi = color >> 8, lo = color;
-  const int buffer_pixel_num = 240;
-  const int chunks = length / buffer_pixel_num;
-  const int rest = length % buffer_pixel_num;
-  const int buffer_num = min( length, buffer_pixel_num);
-
-  uint8_t buffer[buffer_num*2];
+  const int chunks = length / BUFFER_PIXEL_NUM;
+  const int rest = length % BUFFER_PIXEL_NUM;
+  const int buffer_num = min( length, BUFFER_PIXEL_NUM);
   // fill buffer with color data
   for (int i = 0; i < buffer_num; i++) {
     buffer[i * 2] = hi;

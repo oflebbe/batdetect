@@ -63,7 +63,7 @@ const int CAPTURE_CHANNEL = 0;
 
 // because NSAMP/2 > WIDTH
 #define NSAMP 512
-const int FACTOR = 120;
+const int FACTOR = 80;
 
 const int NUM_SAMPLES = NSAMP * FACTOR;
 
@@ -71,12 +71,14 @@ const int NUM_SAMPLES = NSAMP * FACTOR;
 queue_t capture_queue;
 queue_t display_queue;
 
-void start_timer(void) {
+void start_timer(void)
+{
   systick_hw->csr = 0x5;
   systick_hw->rvr = 0x00FFFFFF;
 }
 
-int stop_timer(void) {
+int stop_timer(void)
+{
   const int ticks = 0x00FFFFFF - systick_hw->cvr;
   systick_hw->csr = 0x0;
   systick_hw->rvr = 0x00FFFFFF;
@@ -85,7 +87,8 @@ int stop_timer(void) {
 
 static inline float squaref(float x) { return x * x; }
 
-void led(uint on) {
+void led(uint on)
+{
 #ifndef PICO_W
   gpio_put(PICO_DEFAULT_LED_PIN, on);
 #else
@@ -93,8 +96,8 @@ void led(uint on) {
 #endif
 }
 
-ST7789_t *setup(uint sample_dma_channel) {
-  stdio_init_all();
+ST7789_t *setup(uint sample_dma_channel)
+{
 #ifndef PICO_W
   gpio_init(PICO_DEFAULT_LED_PIN);
   gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
@@ -144,7 +147,8 @@ ST7789_t *setup(uint sample_dma_channel) {
   return sobj;
 }
 
-void sample(uint dma_chan, int samples, uint16_t capture_buf[samples]) {
+void sample(uint dma_chan, int samples, uint16_t capture_buf[samples])
+{
   adc_run(false);
 
   // set number of samples (2 bytes each) to read
@@ -158,14 +162,16 @@ void sample(uint dma_chan, int samples, uint16_t capture_buf[samples]) {
 
 static void inline graphics_pixel(ST7789_bitmap_t *bitmap, unsigned int x,
                                   unsigned int y, int color, int ncolors,
-                                  const uint16_t color_table[ncolors]) {
+                                  const uint16_t color_table[ncolors])
+{
   const int16_t c = color_table[color];
   assert(x < bitmap->width);
   assert(y < bitmap->height);
   bitmap->buf[y * bitmap->width + x] = swap(c);
 }
 
-static float hue2rgb(float p, float q, float t) {
+static float hue2rgb(float p, float q, float t)
+{
   if (t < 0)
     t += 1;
   if (t > 1)
@@ -179,7 +185,8 @@ static float hue2rgb(float p, float q, float t) {
   return p;
 }
 
-static inline uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
+static inline uint16_t color565(uint8_t r, uint8_t g, uint8_t b)
+{
   const uint16_t r_ = r;
   const uint16_t g_ = g;
   const uint16_t b_ = b;
@@ -187,12 +194,16 @@ static inline uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | ((b_ & 0xF8) >> 3);
 }
 
-uint16_t hslToRgb565(float h, float s, float l) {
+uint16_t hslToRgb565(float h, float s, float l)
+{
   float r, g, b;
 
-  if (s == 0) {
+  if (s == 0)
+  {
     r = g = b = l; // achromatic
-  } else {
+  }
+  else
+  {
 
     const float q = l < 0.5 ? l * (1 + s) : l + s - l * s;
     const float p = 2 * l - q;
@@ -206,26 +217,30 @@ uint16_t hslToRgb565(float h, float s, float l) {
                   (uint8_t)(g * 255.f));
 }
 
-static void init_hamming(int len, float window[len]) {
+static void init_hamming(int len, float window[len])
+{
   const float a0 = 25. / 46.;
-  for (int i = 0; i < len; i++) {
-    window[i] = a0 - (1.0 - a0) * cosf((M_TWOPI * i) / (len-1));
+  for (int i = 0; i < len; i++)
+  {
+    window[i] = a0 - (1.0 - a0) * cosf((M_TWOPI * i) / (len - 1));
   }
 }
 
-static int draw_labels(ST7789_t *sobj, unsigned int num_freq) {
-  int freqs[num_freq];
+static int get_freqs(int pos, int num_freq)
+{
+  int start_freq = NSAMP / 2 - num_freq + pos;
+  return (start_freq * FSAMP / 1000) / NSAMP;
+}
 
-  for (int i = 0; i < num_freq; i++) {
-    int j = NSAMP / 2 - num_freq + i;
-    freqs[i] = (j * FSAMP / 1000) / NSAMP;
-  }
+static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
+{
   const int NLABELS = 4;
 
-  for (int i = 0; i < NLABELS; i++) {
+  for (int i = 0; i < NLABELS; i++)
+  {
     char text[4] = {0};
     assert((i * num_freq) / NLABELS < num_freq);
-    snprintf(text, sizeof(text), "%2d", freqs[(i * num_freq) / NLABELS]);
+    snprintf(text, sizeof(text), "%2d", get_freqs((i * num_freq) / NLABELS, num_freq));
     const ST7789_bitmap_t *label_bitmap =
         ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
     ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * num_freq) / NLABELS);
@@ -235,7 +250,8 @@ static int draw_labels(ST7789_t *sobj, unsigned int num_freq) {
   return 2 * 8; // because of %2d an 1 scale
 }
 
-void draw_counter(ST7789_t *sobj, uint counter) {
+void draw_counter(ST7789_t *sobj, uint counter)
+{
   char text[5] = {0};
   snprintf(text, sizeof(text), "%4u", counter);
   const ST7789_bitmap_t *label_bitmap =
@@ -247,30 +263,36 @@ void draw_counter(ST7789_t *sobj, uint counter) {
 
 const char filename_pattern[] = "capture%05d.raw";
 
-uint sd_card_search(FATFS *fs) {
+uint sd_card_search(FATFS *fs)
+{
   uint search = 0;
-  for (; search < 100000; search += 100) {
+  for (; search < 100000; search += 100)
+  {
 
     const int buf_len = snprintf(NULL, 0, filename_pattern, search);
-    if (buf_len <= 0) {
+    if (buf_len <= 0)
+    {
       panic("snprintf failed");
     }
     char str_buffer[buf_len + 1];
     snprintf(str_buffer, sizeof(str_buffer), filename_pattern, search);
     FILINFO fi;
     FRESULT fr = f_stat(str_buffer, &fi);
-    if (fr == FR_NO_FILE) {
+    if (fr == FR_NO_FILE)
+    {
       break;
     }
   }
   return search;
 }
 
-void sd_write(FATFS *fs, int file_count, int size, uint16_t cap_buf[size]) {
+void sd_write(FATFS *fs, int file_count, int size, uint16_t cap_buf[size])
+{
   FIL fil;
 
   const int buf_len = snprintf(NULL, 0, filename_pattern, file_count) + 1;
-  if (buf_len <= 0) {
+  if (buf_len <= 0)
+  {
     panic("snprintf failed");
   }
   char str_buffer[buf_len + 1];
@@ -283,28 +305,32 @@ void sd_write(FATFS *fs, int file_count, int size, uint16_t cap_buf[size]) {
 
   UINT written;
   int res = f_write(&fil, cap_buf, size * 2, &written);
-  if (written != size * 2 || res != FR_OK) {
+  if (written != size * 2 || res != FR_OK)
+  {
     panic("could not write buffer len %d, written %d, result %d\n", size * 2,
           written, res);
   }
   fr = f_close(&fil);
-  if (FR_OK != fr) {
+  if (FR_OK != fr)
+  {
     printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
   }
 
   led(0);
 }
 
-void worker_display(void) {
+void worker_display(void)
+{
   // create hamming window for FFT
   // NSAMP entries
 
-  float hamming[NSAMP] = {0};
+  static float hamming[NSAMP] = {0};
   init_hamming(NSAMP, hamming);
 
   // create color_table
   uint16_t color_table[NCOLORS] = {0};
-  for (int i = 0; i < NCOLORS; i++) {
+  for (int i = 0; i < NCOLORS; i++)
+  {
     color_table[i] = hslToRgb565(((float)i) / (float)NCOLORS, 1.0f, 0.5f);
   }
 
@@ -312,30 +338,33 @@ void worker_display(void) {
       ST7789_create_bitmap(WIDTH_DISPLAY, HEIGHT_DISPLAY);
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
-  while (true) {
+  while (true)
+  {
     uint16_t *cap_buf = NULL;
     queue_remove_blocking(&capture_queue, &cap_buf);
 
-    const unsigned int last_valid_start = NUM_SAMPLES-NSAMP;
-    
-    for (unsigned int column = 0; column < display->width; column++) {
-      
-      kiss_fft_scalar fft_in[NSAMP];
+    const unsigned int last_valid_start = NUM_SAMPLES - NSAMP;
+
+    kiss_fft_scalar *fft_in = malloc(NSAMP * sizeof(kiss_fft_scalar));
+    kiss_fft_cpx *fft_out = malloc(NSAMP * sizeof(kiss_fft_cpx));
+    for (unsigned int column = 0; column < display->width; column++)
+    {
       // kiss_fft_scalar is a float
       // fill fourier transform input
       // multiply with window function
       // subtract voltage offset
 
       const unsigned int start = (column * last_valid_start) / display->width;
-      for (unsigned int i = 0; i < NSAMP; i++) {
+      for (unsigned int i = 0; i < NSAMP; i++)
+      {
         const unsigned int index = i + start;
         assert(index < NUM_SAMPLES);
         fft_in[i] = (float)cap_buf[index] * hamming[i] - 2048.0f;
       }
 
-      kiss_fft_cpx fft_out[NSAMP];
       // compute fast fourier transform
       kiss_fftr(cfg, fft_in, fft_out);
+
       // compute power and calculate max freq component
 
       // consider the freq in WIDTH raster
@@ -345,26 +374,33 @@ void worker_display(void) {
       // log10(scale) = 11.43892
       // empirical lower limit log10(lower limit ) = 4
       assert(NSAMP >= HEIGHT_DISPLAY);
-      for (unsigned int y = 0; y < HEIGHT_DISPLAY; y++) {
+      for (unsigned int y = 0; y < HEIGHT_DISPLAY; y++)
+      {
         const float power = squaref(fft_out[y].r) + squaref(fft_out[y].i);
         int pix = (log10f(power) - 4) / (11. - 4.) * NCOLORS;
-        if (pix < 0) {
+        if (pix < 0)
+        {
           pix = 0;
         }
-        if (pix > NCOLORS) {
+        if (pix > NCOLORS)
+        {
           pix = NCOLORS;
         }
-
         graphics_pixel(display, column, y, pix, NCOLORS, color_table);
       }
     }
+    free(fft_in);
+    free(fft_out);
+
     queue_add_blocking(&display_queue, &display);
   }
 }
 
-int main() {
+int main()
+{
   // set_sys_clock_khz(250000, true);
   // Queue initialization
+  stdio_init_all();
   queue_init(&capture_queue, sizeof(uint16_t *), 1);
   queue_init(&display_queue, sizeof(ST7789_bitmap_t *), 1);
   multicore_reset_core1();
@@ -390,8 +426,9 @@ int main() {
   draw_labels(sobj, HEIGHT_DISPLAY);
   uint16_t *cap_buf = calloc(NUM_SAMPLES, sizeof(uint16_t));
 
-  while (1) {
-
+  while (1)
+  {
+    printf("Hurra\n");
     // get NUM_SAMPLES samples at FSAMP
     sample(sample_dma_chan, NUM_SAMPLES, cap_buf);
 

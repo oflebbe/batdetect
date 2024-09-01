@@ -15,13 +15,17 @@
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
+#if PICO_RP2040
 #include "RP2040.h"
+#else
+#include "RP2350.h"
+#endif
 //
 #include "dma_interrupts.h"
 #include "hw_config.h"
 #include "rp2040_sdio.h"
 #include "rp2040_sdio.pio.h"
-#include "portability.h"
+#include "delays.h"
 #include "sd_card.h"
 #include "my_debug.h"
 #include "util.h"
@@ -424,7 +428,7 @@ static void sdio_verify_rx_checksums(sd_card_t *sd_card_p, uint32_t maxcount, si
             {
                 EMSG_PRINTF("SDIO checksum error in reception: block %d calculated 0x%llx expected 0x%llx\n",
                     blockidx, checksum, expected);
-                // dump_bytes(block_size_words, (uint8_t *)STATE.data_buf + blockidx * block_size_words);
+                dump_bytes(block_size_words, (uint8_t *)STATE.data_buf + blockidx * block_size_words);
             }
         }
     }
@@ -815,7 +819,10 @@ bool rp2040_sdio_init(sd_card_t *sd_card_p, float clk_div) {
     SDIO_PIO->input_sync_bypass |= (1 << SDIO_CLK) | (1 << SDIO_CMD) | (1 << SDIO_D0) | (1 << SDIO_D1) | (1 << SDIO_D2) | (1 << SDIO_D3);
 
     // Redirect GPIOs to PIO
-    gpio_function_t fn;
+#if PICO_SDK_VERSION_MAJOR < 2
+    typedef enum gpio_function gpio_function_t;
+#endif
+   gpio_function_t fn;
     if (pio1 == SDIO_PIO) 
         fn = GPIO_FUNC_PIO1;
     else

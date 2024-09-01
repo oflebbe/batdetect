@@ -59,11 +59,11 @@ void ST7789_blit_bitmap(ST7789_t *self, const ST7789_bitmap_t *bitmap,
 
 void ST7789_flush(ST7789_t *self);
 
-#define min(a, b)                                                              \
-  ({                                                                           \
-    __typeof__(a) _a = (a);                                                    \
-    __typeof__(b) _b = (b);                                                    \
-    _a < _b ? _a : _b;                                                         \
-  })
+static inline int min( int x, int y) {
+  if (x < y) { 
+    return x;
+  }
+  return y;
+}
 
 #endif /*  __ST7789_H__ */
