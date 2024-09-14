@@ -1,7 +1,105 @@
+#ifndef OF_PIXMAP_H
+#define OF_PIXMAP_H
+
+// 16bit color of_pixmap_t (565)
+typedef struct
+{
+  int width;
+  int height;
+  int len;
+  uint16_t buf[];
+} of_pixmap_t;
+
+// Color definitions
+#define BLACK 0x0000
+#define BLUE 0x001F
+#define RED 0xF800
+#define GREEN 0x07E0
+#define CYAN 0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW 0xFFE0
+#define WHITE 0xFFFF
+
+// allocates an of_pixmap_t
+of_pixmap_t *of_pixmap_create(int width, int height);
+const of_pixmap_t *of_pixmap_create_str(int len, const char str[len],
+                                        int16_t color, uint16_t bg,
+                                        int8_t size_x, int8_t size_y);
+
+void of_pixmap_draw_char(of_pixmap_t *pixmap, int off_x, int off_y,
+                         unsigned char c, uint16_t color, uint16_t bg,
+                         int size_x, int size_y);
+
+inline uint16_t of_swap(uint16_t color)
+{
+  const uint8_t hi = (color >> 8) & 0xff;
+  const uint8_t lo = color & 0xff;
+  return hi | (lo << 8);
+};
+
+void of_pixmap_set_pixel(of_pixmap_t *pixmap, unsigned int x,
+                                unsigned int y, uint16_t color);
+
+
+uint16_t of_hslToRgb565(float h, float s, float l);
+
+#ifdef OF_PIXMAP_IMPLEMENTATION
+
+#include <stdlib.h>
 #include <stdint.h>
+
+static const int of_char_width = 5;
+static const int of_char_space = 1;
+static const int of_char_height = 8;
+
+static float of__hue2rgb(float p, float q, float t)
+{
+  if (t < 0)
+    t += 1;
+  if (t > 1)
+    t -= 1;
+  if (t < (1.0 / 6))
+    return p + (q - p) * 6 * t;
+  if (t < (1. / 2.))
+    return q;
+  if (t < (2. / 3.))
+    return p + (q - p) * ((2. / 3.) - t) * 6;
+  return p;
+}
+
+static inline uint16_t of__color565(float r, float g, float b)
+{
+  const uint16_t r_ = (uint8_t) (r * 255.0f);
+  const uint16_t g_ = (uint8_t) (g * 255.0f);
+  const uint16_t b_ = (uint8_t) (b * 255.0f);
+
+  return ((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | ((b_ & 0xF8) >> 3);
+}
+
+uint16_t of_hslToRgb565(float h, float s, float l)
+{
+  float r, g, b;
+
+  if (s == 0)
+  {
+    r = g = b = l; // achromatic
+  }
+  else
+  {
+    const float q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const float p = 2 * l - q;
+
+    r = of__hue2rgb(p, q, h + 1 / 3.);
+    g = of__hue2rgb(p, q, h);
+    b = of__hue2rgb(p, q, h - 1 / 3.);
+  }
+
+  return of__color565(r, g, b);
+}
+
 // Standard ASCII 5x7 font
 
-const uint8_t font[] = {
+const uint8_t of_font[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x3E, 0x5B, 0x4F, 0x5B, 0x3E, 0x3E, 0x6B,
     0x4F, 0x6B, 0x3E, 0x1C, 0x3E, 0x7C, 0x3E, 0x1C, 0x18, 0x3C, 0x7E, 0x3C,
     0x18, 0x1C, 0x57, 0x7D, 0x57, 0x1C, 0x1C, 0x5E, 0x7F, 0x5E, 0x1C, 0x00,
@@ -116,3 +214,90 @@ const uint8_t font[] = {
     0x01, 0x01, 0x1E, 0x00, 0x19, 0x1D, 0x17, 0x12, 0x00, 0x3C, 0x3C, 0x3C,
     0x3C, 0x00, 0x00, 0x00, 0x00, 0x00 // #255 NBSP
 };
+
+// allocates a of_pixmap_t
+// should be deallocated with free
+of_pixmap_t *of_pixmap_create(int width, int height)
+{
+  int len = width * height;
+  of_pixmap_t *pixmap = calloc(sizeof(of_pixmap_t) + sizeof(uint16_t) * len, 1);
+  if (pixmap == NULL)
+  {
+    abort();
+  }
+  *pixmap = (of_pixmap_t){.width = width, .height = height, .len = len};
+
+  return pixmap;
+}
+
+const of_pixmap_t *of_pixmap_create_str(int len, const char str[len],
+                                        int16_t color, uint16_t bg,
+                                        int8_t size_x, int8_t size_y)
+{
+  of_pixmap_t *pixmap = of_pixmap_create(len * (of_char_width + of_char_space) * size_x,
+                                         of_char_height * size_y);
+  if (pixmap == NULL)
+  {
+    abort();
+  }
+  for (int i = 0; i < len; i++)
+  {
+    of_pixmap_draw_char(
+        pixmap, i * (of_char_width + of_char_space) * size_x, 0, str[i],
+        color, bg, size_x, size_y);
+  }
+  return pixmap;
+}
+
+void of_pixmap_draw_char(of_pixmap_t *pixmap, int off_x, int off_y,
+                         unsigned char c, uint16_t color, uint16_t bg,
+                         int size_x, int size_y)
+{
+  if (off_x < 0 || off_y < 0)
+  {
+    abort();
+  }
+  if (off_x + (size_x - 1) + of_char_width > pixmap->width ||
+      off_y + (size_y - 1) + of_char_height > pixmap->height)
+  {
+    abort();
+  }
+
+  if (c >= 176)
+    c++; // Handle 'classic' charset behavior
+
+  color = of_swap(color);
+  bg = of_swap(bg);
+
+  for (int8_t i = 0; i < of_char_width; i++)
+  { // Char o1af_pixmap = 5 columns
+    uint8_t line = of_font[(int)c * of_char_width + i];
+    for (int8_t j = 0; j < of_char_height; j++, line >>= 1)
+    {
+      for (int x = 0; x < size_x; x++)
+      {
+        for (int y = 0; y < size_y; y++)
+        {
+          int index = (off_y + j * size_y + y) * pixmap->width +
+                      (off_x + i * size_x + x);
+          if (index >= 0 && index < pixmap->len)
+          {
+            pixmap->buf[index] = line & 1 ? color : bg;
+          }
+        }
+      }
+    }
+  }
+}
+
+void of_pixmap_set_pixel(of_pixmap_t *pixmap, unsigned int x,
+                                unsigned int y, uint16_t color)
+{
+  assert(x < pixmap->width);
+  assert(y < pixmap->height);
+  pixmap->buf[y * pixmap->width + x] = of_swap(color);
+}
+
+
+#endif
+#endif

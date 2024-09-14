@@ -10,11 +10,14 @@
 
 #include "hardware/adc.h"
 #include "hardware/dma.h"
+#include "hardware/clocks.h"
 #include "hardware/structs/systick.h"
 #include "kiss_fftr.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "pico/util/queue.h"
+#define OF_PIXMAP_IMPLEMENTATION
+#include "of_pixmap.h"
 #include "st7789.h"
 
 #include "f_util.h"
@@ -31,7 +34,7 @@
 
 const int WIDTH = 240;
 const int HEIGHT = 240;
-const int ROTATION = 150;
+const int ROTATION = ROTATE_180;
 
 const int LABEL_SIZE = 2 * 6;
 
@@ -63,7 +66,7 @@ const int CAPTURE_CHANNEL = 0;
 
 // because NSAMP/2 > WIDTH
 #define NSAMP 512
-const int FACTOR = 80;
+const int FACTOR = 300;
 
 const int NUM_SAMPLES = NSAMP * FACTOR;
 
@@ -160,62 +163,7 @@ void sample(uint dma_chan, int samples, uint16_t capture_buf[samples])
   dma_channel_wait_for_finish_blocking(dma_chan);
 }
 
-static void inline graphics_pixel(ST7789_bitmap_t *bitmap, unsigned int x,
-                                  unsigned int y, int color, int ncolors,
-                                  const uint16_t color_table[ncolors])
-{
-  const int16_t c = color_table[color];
-  assert(x < bitmap->width);
-  assert(y < bitmap->height);
-  bitmap->buf[y * bitmap->width + x] = swap(c);
-}
 
-static float hue2rgb(float p, float q, float t)
-{
-  if (t < 0)
-    t += 1;
-  if (t > 1)
-    t -= 1;
-  if (t < (1.0 / 6))
-    return p + (q - p) * 6 * t;
-  if (t < (1. / 2.))
-    return q;
-  if (t < (2. / 3.))
-    return p + (q - p) * ((2. / 3.) - t) * 6;
-  return p;
-}
-
-static inline uint16_t color565(uint8_t r, uint8_t g, uint8_t b)
-{
-  const uint16_t r_ = r;
-  const uint16_t g_ = g;
-  const uint16_t b_ = b;
-
-  return ((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | ((b_ & 0xF8) >> 3);
-}
-
-uint16_t hslToRgb565(float h, float s, float l)
-{
-  float r, g, b;
-
-  if (s == 0)
-  {
-    r = g = b = l; // achromatic
-  }
-  else
-  {
-
-    const float q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const float p = 2 * l - q;
-
-    r = hue2rgb(p, q, h + 1 / 3.);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3.);
-  }
-
-  return color565((uint8_t)(r * 255.f), (uint8_t)(b * 255.f),
-                  (uint8_t)(g * 255.f));
-}
 
 static void init_hamming(int len, float window[len])
 {
@@ -241,11 +189,11 @@ static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
     char text[4] = {0};
     assert((i * num_freq) / NLABELS < num_freq);
     snprintf(text, sizeof(text), "%2d", get_freqs((i * num_freq) / NLABELS, num_freq));
-    const ST7789_bitmap_t *label_bitmap =
-        ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
-    ST7789_blit_bitmap(sobj, label_bitmap, 0, (i * num_freq) / NLABELS);
+    const of_pixmap_t *label_o1af_pixmap =
+        of_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
+    ST7789_blit_of_pixmap(sobj, label_o1af_pixmap, 0, HEIGHT_DISPLAY - (i * num_freq) / NLABELS-1);
     ST7789_flush(sobj);
-    free((void *)(intptr_t)label_bitmap);
+    free((void *)label_o1af_pixmap);
   }
   return 2 * 8; // because of %2d an 1 scale
 }
@@ -254,11 +202,11 @@ void draw_counter(ST7789_t *sobj, uint counter)
 {
   char text[5] = {0};
   snprintf(text, sizeof(text), "%4u", counter);
-  const ST7789_bitmap_t *label_bitmap =
-      ST7789_create_str_bitmap(sizeof(text), text, WHITE, BLACK, 1, 1);
-  ST7789_blit_bitmap(sobj, label_bitmap, 200, HEIGHT - 8);
+  const of_pixmap_t *label_pixmap =
+      of_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
+  ST7789_blit_of_pixmap(sobj, label_pixmap, 200, HEIGHT - 8);
   ST7789_flush(sobj);
-  free((void *)label_bitmap);
+  free((void *)label_pixmap);
 }
 
 const char filename_pattern[] = "capture%05d.raw";
@@ -323,7 +271,6 @@ void worker_display(void)
 {
   // create hamming window for FFT
   // NSAMP entries
-
   static float hamming[NSAMP] = {0};
   init_hamming(NSAMP, hamming);
 
@@ -331,11 +278,10 @@ void worker_display(void)
   uint16_t color_table[NCOLORS] = {0};
   for (int i = 0; i < NCOLORS; i++)
   {
-    color_table[i] = hslToRgb565(((float)i) / (float)NCOLORS, 1.0f, 0.5f);
+    color_table[i] = of_hslToRgb565(((float)i) / (float)NCOLORS, 1.0f, 0.5f);
   }
 
-  ST7789_bitmap_t *display =
-      ST7789_create_bitmap(WIDTH_DISPLAY, HEIGHT_DISPLAY);
+  of_pixmap_t *display = of_pixmap_create(WIDTH_DISPLAY, HEIGHT_DISPLAY);
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
   while (true)
@@ -386,7 +332,8 @@ void worker_display(void)
         {
           pix = NCOLORS;
         }
-        graphics_pixel(display, column, y, pix, NCOLORS, color_table);
+        uint16_t c = color_table[ pix];
+        of_pixmap_set_pixel(display, column, HEIGHT_DISPLAY-y-1, c);
       }
     }
     free(fft_in);
@@ -400,9 +347,11 @@ int main()
 {
   // set_sys_clock_khz(250000, true);
   // Queue initialization
+  sleep_ms(100);
   stdio_init_all();
+
   queue_init(&capture_queue, sizeof(uint16_t *), 1);
-  queue_init(&display_queue, sizeof(ST7789_bitmap_t *), 1);
+  queue_init(&display_queue, sizeof(of_pixmap_t *), 1);
   multicore_reset_core1();
   sleep_ms(100);
   multicore_launch_core1(worker_display);
@@ -428,7 +377,6 @@ int main()
 
   while (1)
   {
-    printf("Hurra\n");
     // get NUM_SAMPLES samples at FSAMP
     sample(sample_dma_chan, NUM_SAMPLES, cap_buf);
 
@@ -440,11 +388,11 @@ int main()
     draw_counter(sobj, file_count++);
 
     // get audiogram result from FFT
-    ST7789_bitmap_t *display = NULL;
+    of_pixmap_t *display = NULL;
     queue_remove_blocking(&display_queue, &display);
 
     // draw audiogram display
-    ST7789_blit_bitmap(sobj, display, LABEL_SIZE, 0);
+    ST7789_blit_of_pixmap(sobj, display, LABEL_SIZE, 0);
   }
 
   // should never get here
