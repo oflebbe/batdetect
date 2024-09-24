@@ -16,8 +16,8 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "pico/util/queue.h"
-#define OF_PIXMAP_IMPLEMENTATION
-#include "of_pixmap.h"
+#define FLO_PIXMAP_IMPLEMENTATION
+#include "flo_pixmap.h"
 #include "st7789.h"
 
 #include "f_util.h"
@@ -189,9 +189,9 @@ static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
     char text[4] = {0};
     assert((i * num_freq) / NLABELS < num_freq);
     snprintf(text, sizeof(text), "%2d", get_freqs((i * num_freq) / NLABELS, num_freq));
-    const of_pixmap_t *label_o1af_pixmap =
-        of_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
-    ST7789_blit_of_pixmap(sobj, label_o1af_pixmap, 0, HEIGHT_DISPLAY - (i * num_freq) / NLABELS-1);
+    const flo_pixmap_t *label_o1af_pixmap =
+        flo_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
+    ST7789_blit_flo_pixmap_t(sobj, label_o1af_pixmap, 0, HEIGHT_DISPLAY - (i * num_freq) / NLABELS-1);
     ST7789_flush(sobj);
     free((void *)label_o1af_pixmap);
   }
@@ -202,9 +202,9 @@ void draw_counter(ST7789_t *sobj, uint counter)
 {
   char text[5] = {0};
   snprintf(text, sizeof(text), "%4u", counter);
-  const of_pixmap_t *label_pixmap =
-      of_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
-  ST7789_blit_of_pixmap(sobj, label_pixmap, 200, HEIGHT - 8);
+  const flo_pixmap_t *label_pixmap =
+      flo_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
+  ST7789_blit_flo_pixmap_t(sobj, label_pixmap, 200, HEIGHT - 8);
   ST7789_flush(sobj);
   free((void *)label_pixmap);
 }
@@ -278,10 +278,10 @@ void worker_display(void)
   uint16_t color_table[NCOLORS] = {0};
   for (int i = 0; i < NCOLORS; i++)
   {
-    color_table[i] = of_hslToRgb565(((float)i) / (float)NCOLORS, 1.0f, 0.5f);
+    color_table[i] = flo_hslToRgb565(((float)i) / (float)NCOLORS, 1.0f, 0.5f);
   }
 
-  of_pixmap_t *display = of_pixmap_create(WIDTH_DISPLAY, HEIGHT_DISPLAY);
+  flo_pixmap_t *display = flo_pixmap_create(WIDTH_DISPLAY, HEIGHT_DISPLAY);
   kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
 
   while (true)
@@ -292,7 +292,7 @@ void worker_display(void)
     const unsigned int last_valid_start = NUM_SAMPLES - NSAMP;
 
     kiss_fft_scalar *fft_in = malloc(NSAMP * sizeof(kiss_fft_scalar));
-    kiss_fft_cpx *fft_out = malloc(NSAMP * sizeof(kiss_fft_cpx));
+    kiss_fft_cpx *fft_out = malloc((NSAMP/2+1) * sizeof(kiss_fft_cpx));
     for (unsigned int column = 0; column < display->width; column++)
     {
       // kiss_fft_scalar is a float
@@ -333,7 +333,7 @@ void worker_display(void)
           pix = NCOLORS;
         }
         uint16_t c = color_table[ pix];
-        of_pixmap_set_pixel(display, column, HEIGHT_DISPLAY-y-1, c);
+        flo_pixmap_set_pixel(display, column, HEIGHT_DISPLAY-y-1, c);
       }
     }
     free(fft_in);
@@ -351,7 +351,7 @@ int main()
   stdio_init_all();
 
   queue_init(&capture_queue, sizeof(uint16_t *), 1);
-  queue_init(&display_queue, sizeof(of_pixmap_t *), 1);
+  queue_init(&display_queue, sizeof(flo_pixmap_t *), 1);
   multicore_reset_core1();
   sleep_ms(100);
   multicore_launch_core1(worker_display);
@@ -388,11 +388,11 @@ int main()
     draw_counter(sobj, file_count++);
 
     // get audiogram result from FFT
-    of_pixmap_t *display = NULL;
+    flo_pixmap_t *display = NULL;
     queue_remove_blocking(&display_queue, &display);
 
     // draw audiogram display
-    ST7789_blit_of_pixmap(sobj, display, LABEL_SIZE, 0);
+    ST7789_blit_flo_pixmap_t(sobj, display, LABEL_SIZE, 0);
   }
 
   // should never get here

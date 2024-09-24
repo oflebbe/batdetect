@@ -278,7 +278,7 @@ void ST7789_fill_rect(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
   fill_color_buffer(self, color, w * h);
 }
 
-void ST7789_blit_of_pixmap(ST7789_t *self, const of_pixmap_t *pixmap,
+void ST7789_blit_flo_pixmap_t(ST7789_t *self, const flo_pixmap_t *pixmap,
                            int16_t x, int16_t y)
 {
   if (pixmap == NULL)

@@ -1,7 +1,7 @@
 #ifndef __ST7789_H__
 #define __ST7789_H__
 
-#include "of_pixmap.h"
+#include "flo_pixmap.h"
 #include <hardware/spi.h>
 
 typedef struct _ST7789_t ST7789_t;
@@ -30,7 +30,7 @@ void ST7789_vline(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
 void ST7789_fill_rect(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
                       uint16_t h, int16_t color);
 
-void ST7789_blit_of_pixmap(ST7789_t *self, const of_pixmap_t *pixmap,
+void ST7789_blit_flo_pixmap_t(ST7789_t *self, const flo_pixmap_t *pixmap,
                         int16_t x, int16_t y);
 
 void ST7789_flush(ST7789_t *self);
