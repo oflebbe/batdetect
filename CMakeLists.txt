@@ -27,7 +27,7 @@ pico_sdk_init()
 
 # add_compile_definitions(PICO_W)
 
-add_executable(batdetect batdetect.c st7789.c st7789.h flo_pixmap.h kiss_fft.c kiss_fftr.c)
+add_executable(batdetect batdetect.c st7789.c st7789.h flo_pixmap.h kiss_fft.c kiss_fftr.c src/hw_config.c)
 
 
 add_subdirectory(src)
@@ -51,7 +51,7 @@ target_link_libraries(batdetect
 	pico_multicore
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 	)
-pico_enable_stdio_usb(batdetect 1)
+pico_enable_stdio_usb(batdetect 0)
 pico_enable_stdio_uart(batdetect 0)
 ##
 #	pico_define_boot_stage2(slower_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})

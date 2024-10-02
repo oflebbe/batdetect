@@ -209,43 +209,55 @@ void draw_counter(ST7789_t *sobj, uint counter)
   free((void *)label_pixmap);
 }
 
-const char filename_pattern[] = "capture%05d.raw";
+const char filename_pattern[] = "bat%03d/capture%05d.raw";
 
 uint sd_card_search(FATFS *fs)
 {
-  uint search = 0;
-  for (; search < 100000; search += 100)
-  {
-
-    const int buf_len = snprintf(NULL, 0, filename_pattern, search);
-    if (buf_len <= 0)
-    {
-      panic("snprintf failed");
-    }
-    char str_buffer[buf_len + 1];
-    snprintf(str_buffer, sizeof(str_buffer), filename_pattern, search);
-    FILINFO fi;
-    FRESULT fr = f_stat(str_buffer, &fi);
-    if (fr == FR_NO_FILE)
-    {
+  DIR *dir = calloc( 1, sizeof(DIR));
+  FILINFO *fi = calloc( 1, sizeof(FILINFO));
+  int num = 0;
+  uint last = 0;
+  FRESULT res = f_findfirst( dir, fi, "/", "bat???");
+  if (res != FR_OK) {
+    panic("f_findfirst failed");
+  }
+  do {
+    if (fi->fname[0] == 0) {
       break;
     }
+    sscanf(fi->fname, "bat%d", &num);
+    if (num > last) {
+      last = num;
+    }
+  } while (f_findnext( dir, fi)==FR_OK);
+  last++;
+  // FAT only supports 500 something entries in Root
+  if (last > 500) {
+    panic("too many subdirs");
   }
-  return search;
+  const int STRLEN = 10;
+  static char str[ 10];
+  snprintf( str, STRLEN, "bat%03d", last);
+  if (FR_OK != f_mkdir( str)) {
+    panic("canoot create subdir");
+  }
+  free( fi);
+  free(dir);
+  return last;
 }
 
-void sd_write(FATFS *fs, int file_count, int size, uint16_t cap_buf[size])
+void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_buf[size])
 {
-  FIL fil;
+  FIL fil = { 0};
 
-  const int buf_len = snprintf(NULL, 0, filename_pattern, file_count) + 1;
+  const int buf_len = snprintf(NULL, 0, filename_pattern, dir_count, file_count);
   if (buf_len <= 0)
   {
     panic("snprintf failed");
   }
   char str_buffer[buf_len + 1];
 
-  snprintf(str_buffer, sizeof(str_buffer), filename_pattern, file_count);
+  snprintf(str_buffer, sizeof(str_buffer), filename_pattern, dir_count, file_count);
   led(1);
   int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
   if (FR_OK != fr && FR_EXIST != fr)
@@ -305,7 +317,7 @@ void worker_display(void)
       {
         const unsigned int index = i + start;
         assert(index < NUM_SAMPLES);
-        fft_in[i] = (float)cap_buf[index] * hamming[i] - 2048.0f;
+        fft_in[i] = ((float)cap_buf[index]  - 2048.0f) * hamming[i];
       }
 
       // compute fast fourier transform
@@ -328,11 +340,14 @@ void worker_display(void)
         {
           pix = 0;
         }
-        if (pix > NCOLORS)
+        if (pix >= NCOLORS)
         {
-          pix = NCOLORS;
+          pix = NCOLORS-1;
         }
         uint16_t c = color_table[ pix];
+        assert( column >= 0);
+        assert(column < WIDTH_DISPLAY);
+
         flo_pixmap_set_pixel(display, column, HEIGHT_DISPLAY-y-1, c);
       }
     }
@@ -359,11 +374,11 @@ int main()
   // SDCard init, look for free slot
   FATFS fs;
   FRESULT fr = f_mount(&fs, "", 1);
-  if (FR_OK != fr)
+  if (FR_OK != fr) {
     panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
-
-  uint file_count = sd_card_search(&fs);
-
+  }
+  uint dir_count = sd_card_search(&fs);
+  uint file_count = 0;
   const uint sample_dma_chan = dma_claim_unused_channel(true);
 
   // setup ports and outputs
@@ -384,7 +399,7 @@ int main()
     queue_add_blocking(&capture_queue, &cap_buf);
 
     /// write out in parallel to FFT
-    sd_write(&fs, file_count, NUM_SAMPLES, cap_buf);
+    sd_write(&fs, dir_count, file_count, NUM_SAMPLES, cap_buf);
     draw_counter(sobj, file_count++);
 
     // get audiogram result from FFT
