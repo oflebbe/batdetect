@@ -198,13 +198,13 @@ static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
   return 2 * 8; // because of %2d an 1 scale
 }
 
-void draw_counter(ST7789_t *sobj, uint counter)
+void draw_int(ST7789_t *sobj, uint value, int xoffset)
 {
   char text[5] = {0};
-  snprintf(text, sizeof(text), "%4u", counter);
+  snprintf(text, sizeof(text), "%4u", value);
   const flo_pixmap_t *label_pixmap =
       flo_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
-  ST7789_blit_flo_pixmap_t(sobj, label_pixmap, 200, HEIGHT - 8);
+  ST7789_blit_flo_pixmap_t(sobj, label_pixmap, xoffset, HEIGHT - 8);
   ST7789_flush(sobj);
   free((void *)label_pixmap);
 }
@@ -390,22 +390,27 @@ int main()
   draw_labels(sobj, HEIGHT_DISPLAY);
   uint16_t *cap_buf = calloc(NUM_SAMPLES, sizeof(uint16_t));
 
+    
   while (1)
   {
     // get NUM_SAMPLES samples at FSAMP
     sample(sample_dma_chan, NUM_SAMPLES, cap_buf);
-
+    absolute_time_t start_processing = get_absolute_time();
+  
     // send to FFT
     queue_add_blocking(&capture_queue, &cap_buf);
 
     /// write out in parallel to FFT
     sd_write(&fs, dir_count, file_count, NUM_SAMPLES, cap_buf);
-    draw_counter(sobj, file_count++);
+    draw_int(sobj, dir_count, 150);
+    draw_int(sobj, file_count++, 200);
 
     // get audiogram result from FFT
     flo_pixmap_t *display = NULL;
     queue_remove_blocking(&display_queue, &display);
-
+    absolute_time_t end_processing = get_absolute_time();
+    int64_t diff = absolute_time_diff_us( start_processing, end_processing);
+    draw_int( sobj, diff / 1000, 50);
     // draw audiogram display
     ST7789_blit_flo_pixmap_t(sobj, display, LABEL_SIZE, 0);
   }
