@@ -11,8 +11,8 @@
 #include "hardware/adc.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
-#include "hardware/structs/systick.h"
-#include "kiss_fftr.h"
+#define MEOW_FFT_IMPLEMENTATION
+#include "meow_fft.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "pico/util/queue.h"
@@ -73,20 +73,6 @@ const int NUM_SAMPLES = NSAMP * FACTOR;
 // Queue for multiprocessing
 queue_t capture_queue;
 queue_t display_queue;
-
-void start_timer(void)
-{
-  systick_hw->csr = 0x5;
-  systick_hw->rvr = 0x00FFFFFF;
-}
-
-int stop_timer(void)
-{
-  const int ticks = 0x00FFFFFF - systick_hw->cvr;
-  systick_hw->csr = 0x0;
-  systick_hw->rvr = 0x00FFFFFF;
-  return ticks;
-}
 
 static inline float squaref(float x) { return x * x; }
 
@@ -163,8 +149,6 @@ void sample(uint dma_chan, int samples, uint16_t capture_buf[samples])
   dma_channel_wait_for_finish_blocking(dma_chan);
 }
 
-
-
 static void init_hamming(int len, float window[len])
 {
   const float a0 = 25. / 46.;
@@ -191,7 +175,7 @@ static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
     snprintf(text, sizeof(text), "%2d", get_freqs((i * num_freq) / NLABELS, num_freq));
     const flo_pixmap_t *label_o1af_pixmap =
         flo_pixmap_create_str(sizeof(text), text, WHITE, BLACK, 1, 1);
-    ST7789_blit_flo_pixmap_t(sobj, label_o1af_pixmap, 0, HEIGHT_DISPLAY - (i * num_freq) / NLABELS-1);
+    ST7789_blit_flo_pixmap_t(sobj, label_o1af_pixmap, 0, HEIGHT_DISPLAY - (i * num_freq) / NLABELS - 1);
     ST7789_flush(sobj);
     free((void *)label_o1af_pixmap);
   }
@@ -213,56 +197,68 @@ const char filename_pattern[] = "bat%03d/capture%05d.raw";
 
 uint sd_card_search(FATFS *fs)
 {
-  DIR *dir = calloc( 1, sizeof(DIR));
-  FILINFO *fi = calloc( 1, sizeof(FILINFO));
+  DIR *dir = calloc(1, sizeof(DIR));
+  FILINFO *fi = calloc(1, sizeof(FILINFO));
   int num = 0;
   uint last = 0;
-  FRESULT res = f_findfirst( dir, fi, "/", "bat???");
-  if (res != FR_OK) {
+  FRESULT res = f_findfirst(dir, fi, "/", "bat???");
+  if (res != FR_OK)
+  {
     panic("f_findfirst failed");
   }
-  do {
-    if (fi->fname[0] == 0) {
+  do
+  {
+    if (fi->fname[0] == 0)
+    {
       break;
     }
     sscanf(fi->fname, "bat%d", &num);
-    if (num > last) {
+    if (num > last)
+    {
       last = num;
     }
-  } while (f_findnext( dir, fi)==FR_OK);
+  } while (f_findnext(dir, fi) == FR_OK);
   last++;
   // FAT only supports 500 something entries in Root
-  if (last > 500) {
+  if (last > 500)
+  {
     panic("too many subdirs");
   }
   const int STRLEN = 10;
-  static char str[ 10];
-  snprintf( str, STRLEN, "bat%03d", last);
-  if (FR_OK != f_mkdir( str)) {
+  static char str[10];
+  snprintf(str, STRLEN, "bat%03d", last);
+  if (FR_OK != f_mkdir(str))
+  {
     panic("canoot create subdir");
   }
-  free( fi);
+  free(fi);
   free(dir);
   return last;
 }
 
+FIL fil;
+bool is_open = false;
+
 void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_buf[size])
 {
-  FIL fil = { 0};
-
-  const int buf_len = snprintf(NULL, 0, filename_pattern, dir_count, file_count);
-  if (buf_len <= 0)
+     led(1);
+  if (!is_open)
   {
-    panic("snprintf failed");
+    const int buf_len = snprintf(NULL, 0, filename_pattern, dir_count, file_count);
+    if (buf_len <= 0)
+    {
+      panic("snprintf failed");
+    }
+    char str_buffer[buf_len + 1];
+
+    snprintf(str_buffer, sizeof(str_buffer), filename_pattern, dir_count, file_count);
+ 
+
+    int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
+    if (FR_OK != fr && FR_EXIST != fr)
+      panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
+      is_open=true;
   }
-  char str_buffer[buf_len + 1];
-
-  snprintf(str_buffer, sizeof(str_buffer), filename_pattern, dir_count, file_count);
-  led(1);
-  int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
-  if (FR_OK != fr && FR_EXIST != fr)
-    panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
-
   UINT written;
   int res = f_write(&fil, cap_buf, size * 2, &written);
   if (written != size * 2 || res != FR_OK)
@@ -270,11 +266,12 @@ void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_b
     panic("could not write buffer len %d, written %d, result %d\n", size * 2,
           written, res);
   }
-  fr = f_close(&fil);
+  f_sync(&fil);
+  /*fr = f_close(&fil);
   if (FR_OK != fr)
   {
     printf("f_close error: %s (%d)\n", FRESULT_str(fr), fr);
-  }
+  }*/
 
   led(0);
 }
@@ -294,8 +291,10 @@ void worker_display(void)
   }
 
   flo_pixmap_t *display = flo_pixmap_create(WIDTH_DISPLAY, HEIGHT_DISPLAY);
-  kiss_fftr_cfg cfg = kiss_fftr_alloc(NSAMP, false, 0, 0);
-
+  size_t workset_bytes = meow_fft_generate_workset_real(NSAMP, NULL);
+  Meow_FFT_Workset_Real *fft_real =
+      (Meow_FFT_Workset_Real *)malloc(workset_bytes);
+  meow_fft_generate_workset_real(NSAMP, fft_real);
   while (true)
   {
     uint16_t *cap_buf = NULL;
@@ -303,8 +302,8 @@ void worker_display(void)
 
     const unsigned int last_valid_start = NUM_SAMPLES - NSAMP;
 
-    kiss_fft_scalar *fft_in = malloc(NSAMP * sizeof(kiss_fft_scalar));
-    kiss_fft_cpx *fft_out = malloc((NSAMP/2+1) * sizeof(kiss_fft_cpx));
+    float *fft_in = malloc(NSAMP * sizeof(float));
+    Meow_FFT_Complex *fft_out = malloc((NSAMP / 2 + 1) * sizeof(Meow_FFT_Complex));
     for (unsigned int column = 0; column < display->width; column++)
     {
       // kiss_fft_scalar is a float
@@ -317,11 +316,11 @@ void worker_display(void)
       {
         const unsigned int index = i + start;
         assert(index < NUM_SAMPLES);
-        fft_in[i] = ((float)cap_buf[index]  - 2048.0f) * hamming[i];
+        fft_in[i] = ((float)cap_buf[index] - 2048.0f) * hamming[i];
       }
 
       // compute fast fourier transform
-      kiss_fftr(cfg, fft_in, fft_out);
+      meow_fft_real(fft_real, fft_in, fft_out);
 
       // compute power and calculate max freq component
 
@@ -334,7 +333,7 @@ void worker_display(void)
       assert(NSAMP >= HEIGHT_DISPLAY);
       for (unsigned int y = 0; y < HEIGHT_DISPLAY; y++)
       {
-        const float power = squaref(fft_out[y].r) + squaref(fft_out[y].i);
+        const float power = squaref(fft_out[y].r) + squaref(fft_out[y].j);
         int pix = (log10f(power) - 4) / (11. - 4.) * NCOLORS;
         if (pix < 0)
         {
@@ -342,13 +341,13 @@ void worker_display(void)
         }
         if (pix >= NCOLORS)
         {
-          pix = NCOLORS-1;
+          pix = NCOLORS - 1;
         }
-        uint16_t c = color_table[ pix];
-        assert( column >= 0);
+        uint16_t c = color_table[pix];
+        assert(column >= 0);
         assert(column < WIDTH_DISPLAY);
 
-        flo_pixmap_set_pixel(display, column, HEIGHT_DISPLAY-y-1, c);
+        flo_pixmap_set_pixel(display, column, HEIGHT_DISPLAY - y - 1, c);
       }
     }
     free(fft_in);
@@ -374,7 +373,8 @@ int main()
   // SDCard init, look for free slot
   FATFS fs;
   FRESULT fr = f_mount(&fs, "", 1);
-  if (FR_OK != fr) {
+  if (FR_OK != fr)
+  {
     panic("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
   }
   uint dir_count = sd_card_search(&fs);
@@ -390,13 +390,12 @@ int main()
   draw_labels(sobj, HEIGHT_DISPLAY);
   uint16_t *cap_buf = calloc(NUM_SAMPLES, sizeof(uint16_t));
 
-    
   while (1)
   {
     // get NUM_SAMPLES samples at FSAMP
     sample(sample_dma_chan, NUM_SAMPLES, cap_buf);
     absolute_time_t start_processing = get_absolute_time();
-  
+
     // send to FFT
     queue_add_blocking(&capture_queue, &cap_buf);
 
@@ -409,8 +408,8 @@ int main()
     flo_pixmap_t *display = NULL;
     queue_remove_blocking(&display_queue, &display);
     absolute_time_t end_processing = get_absolute_time();
-    int64_t diff = absolute_time_diff_us( start_processing, end_processing);
-    draw_int( sobj, diff / 1000, 50);
+    int64_t diff = absolute_time_diff_us(start_processing, end_processing);
+    draw_int(sobj, diff / 1000, 50);
     // draw audiogram display
     ST7789_blit_flo_pixmap_t(sobj, display, LABEL_SIZE, 0);
   }

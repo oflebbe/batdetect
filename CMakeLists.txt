@@ -27,7 +27,7 @@ pico_sdk_init()
 
 # add_compile_definitions(PICO_W)
 
-add_executable(batdetect batdetect.c st7789.c st7789.h flo_pixmap.h kiss_fft.c kiss_fftr.c src/hw_config.c)
+add_executable(batdetect batdetect.c st7789.c st7789.h flo_pixmap.h meow_fft.h src/hw_config.c)
 
 
 add_subdirectory(src)

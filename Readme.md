@@ -56,3 +56,6 @@ The software depends on the [Raspberry pico SDK Version 2](https://github.com/ra
 * ~~Some green lines on the lower display~~
 * ~~Orientation is wrong~~
 
+## Notes on Performancs
+* kissfft took 153ms to compute
+* meow_fft took 134ms to computerec
