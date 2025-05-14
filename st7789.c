@@ -157,7 +157,7 @@ static void write_blocking(ST7789_t *self, unsigned int len, const uint8_t src[l
 
 static void write_cmd_repeat_rest(ST7789_t *self, uint8_t cmd,
                                   size_t len, const uint8_t data[len], int repeat,
-                                  int rest)
+                                  unsigned int rest)
 {
   // Make sure previous transfer has ended
   ST7789_flush(self);
@@ -211,14 +211,14 @@ static void set_window(ST7789_t *self, uint16_t x0, uint16_t y0, uint16_t x1,
 #define BUFFER_PIXEL_NUM 32
 static uint8_t buffer[BUFFER_PIXEL_NUM * 2];
 
-static void fill_color_buffer(ST7789_t *self, uint16_t color, int length)
+static void fill_color_buffer(ST7789_t *self, uint16_t color, unsigned int length)
 {
   uint8_t hi = color >> 8, lo = color;
   const int chunks = length / BUFFER_PIXEL_NUM;
-  const int rest = length % BUFFER_PIXEL_NUM;
-  const int buffer_num = min(length, BUFFER_PIXEL_NUM);
+  const unsigned int rest = length % BUFFER_PIXEL_NUM;
+  const unsigned int buffer_num = min_unsigned(length, BUFFER_PIXEL_NUM);
   // fill buffer with color data
-  for (int i = 0; i < buffer_num; i++)
+  for (size_t i = 0; i < buffer_num; i++)
   {
     buffer[i * 2] = hi;
     buffer[i * 2 + 1] = lo;
@@ -272,14 +272,14 @@ void ST7789_vline(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
 }
 
 void ST7789_fill_rect(ST7789_t *self, uint16_t x, uint16_t y, uint16_t w,
-                      uint16_t h, int16_t color)
+                      uint16_t h, uint16_t color)
 {
   set_window(self, x, y, x + w - 1, y + h - 1);
   fill_color_buffer(self, color, w * h);
 }
 
 void ST7789_blit_flo_pixmap_t(ST7789_t *self, const flo_pixmap_t *pixmap,
-                           int16_t x, int16_t y)
+                              uint16_t x, uint16_t y)
 {
   if (pixmap == NULL)
   {
@@ -301,7 +301,7 @@ void ST7789_backlight(ST7789_t *self, uint8_t brightness)
   pwm_set_gpio_level(self->backlight, value);
 }
 
-ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
+ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, uint16_t width, uint16_t height,
                             ST7789_rotation_t rotation, uint cs, uint reset, uint dc,
                             uint backlight, uint tx, uint sck)
 {
@@ -343,8 +343,12 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   gpio_set_function(sck, GPIO_FUNC_SPI);
 
   spi_set_format(self->spi_obj, 8, SPI_CPOL_1, SPI_CPHA_0, SPI_MSB_FIRST);
-
-  self->dma_channel = dma_claim_unused_channel(true);
+  int channel = dma_claim_unused_channel(true);
+  if (channel < 0)
+  {
+    panic("no channel available");
+  }
+  self->dma_channel = (uint)channel;
   dma_channel_config dma_config =
       dma_channel_get_default_config(self->dma_channel);
   channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
@@ -396,7 +400,7 @@ ST7789_t *ST7789_spi_create(spi_inst_t *spi_inst, int16_t width, int16_t height,
   return self;
 }
 
-ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
+ST7789_t *ST7789_parallel_create(uint16_t width, uint16_t height, uint cs,
                                  uint dc, uint backlight, uint wr_sck,
                                  uint rd_sck, uint d0)
 {
@@ -405,6 +409,12 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   {
     abort();
   }
+  int sm = pio_claim_unused_sm(pio1, true);
+  if (sm < 1)
+  {
+    panic("no sm available");
+  }
+
   *self = (ST7789_t){
       .is_spi = false,
       .width = width,
@@ -418,7 +428,7 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
       .cs = cs,
       .backlight = backlight,
       .parallel_pio = pio1,
-      .parallel_sm = pio_claim_unused_sm(pio1, true)};
+      .parallel_sm = (uint)sm};
 
   gpio_init(self->cs);
   gpio_set_dir(self->cs, GPIO_OUT);
@@ -433,20 +443,25 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   gpio_set_function(self->backlight, GPIO_FUNC_PWM);
   ST7789_backlight(self, 0); // Turn backlight off initially
 
-  const uint parallel_offset =
-      pio_add_program(self->parallel_pio, &st7789_parallel_program);
+  const int offset = pio_add_program(self->parallel_pio, &st7789_parallel_program);
+  if (offset < 0)
+  {
+    panic("couldn't load program");
+  }
+  const uint parallel_offset = (uint)offset;
+
   pio_gpio_init(self->parallel_pio, wr_sck);
 
   gpio_set_function(rd_sck, GPIO_FUNC_SIO);
   gpio_set_dir(rd_sck, GPIO_OUT);
 
-  for (int i = 0; i < 8; i++)
+  for (unsigned int i = 0; i < 8; i++)
   {
     gpio_set_function(d0 + i, GPIO_FUNC_SIO);
     gpio_set_dir(d0 + i, GPIO_OUT);
   }
 
-  for (int i = 0u; i < 8; i++)
+  for (unsigned int i = 0; i < 8; i++)
   {
     pio_gpio_init(self->parallel_pio, d0 + i);
   }
@@ -473,7 +488,12 @@ ST7789_t *ST7789_parallel_create(int16_t width, int16_t height, uint cs,
   pio_sm_set_enabled(self->parallel_pio, self->parallel_sm, true);
 
   // Allocate, config and init an dma
-  self->dma_channel = dma_claim_unused_channel(true);
+  const int channel = dma_claim_unused_channel(true);
+  if (channel < 1)
+  {
+    panic("couldn't alloc channel");
+  }
+  self->dma_channel = (uint)channel;
   dma_channel_config dma_config =
       dma_channel_get_default_config(self->dma_channel);
   channel_config_set_transfer_data_size(&dma_config, DMA_SIZE_8);
