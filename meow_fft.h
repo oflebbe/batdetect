@@ -38,14 +38,14 @@ struct Meow_FFT_Workset_Real;
 
 size_t meow_fft_generate_workset
 (
-      int                      N
+      unsigned                 N
     , struct Meow_FFT_Workset* workset
 );
 // returns the size of the workset if null is passed. 0 if N is invalid.
 
 size_t meow_fft_generate_workset_real
 (
-      int                           N
+      unsigned                      N
     , struct Meow_FFT_Workset_Real* workset
 );
 // returns the size of the workset if null is passed. 0 if N is invalid.
@@ -139,7 +139,7 @@ Meow_Fft_Stages;
 
 typedef struct Meow_FFT_Workset
 {
-    int               N;
+    unsigned int      N;
 
     Meow_FFT_Complex* wn;
     // Non-null only defined if there is a slow-dft as one of the radix stages.
@@ -318,7 +318,7 @@ Meow_Stage_Info meow_calculate_stages(unsigned n, Meow_FFT_Workset* workset)
     return result;
 }
 
-size_t meow_fft_generate_workset(int N, Meow_FFT_Workset* workset)
+size_t meow_fft_generate_workset(unsigned N, Meow_FFT_Workset* workset)
 {
     if (N < 2)
     {
@@ -389,7 +389,7 @@ size_t meow_fft_generate_workset(int N, Meow_FFT_Workset* workset)
 
 size_t meow_fft_generate_workset_real
 (
-      const int              N
+      const unsigned         N
     , Meow_FFT_Workset_Real* workset
 )
 {
@@ -435,7 +435,7 @@ unsigned meow_fft_is_slow_real(const Meow_FFT_Workset_Real* workset)
 
 // -----------------------------------------------------------------------------
 
-inline Meow_FFT_Complex meow_add
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_add
 (
       const Meow_FFT_Complex lhs
     , const Meow_FFT_Complex rhs
@@ -450,7 +450,7 @@ inline Meow_FFT_Complex meow_add
     return result;
 }
 
-inline Meow_FFT_Complex meow_sub
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_sub
 (
       const Meow_FFT_Complex lhs
     , const Meow_FFT_Complex rhs
@@ -465,7 +465,7 @@ inline Meow_FFT_Complex meow_sub
     return result;
 }
 
-inline Meow_FFT_Complex meow_negate(const Meow_FFT_Complex lhs)
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_negate(const Meow_FFT_Complex lhs)
 {
     Meow_FFT_Complex result =
     {
@@ -476,7 +476,7 @@ inline Meow_FFT_Complex meow_negate(const Meow_FFT_Complex lhs)
     return result;
 }
 
-inline Meow_FFT_Complex meow_conjugate(const Meow_FFT_Complex lhs)
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_conjugate(const Meow_FFT_Complex lhs)
 {
     Meow_FFT_Complex result =
     {
@@ -487,7 +487,7 @@ inline Meow_FFT_Complex meow_conjugate(const Meow_FFT_Complex lhs)
     return result;
 }
 
-inline Meow_FFT_Complex meow_mul
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_mul
 (
       const Meow_FFT_Complex lhs
     , const Meow_FFT_Complex rhs
@@ -502,7 +502,7 @@ inline Meow_FFT_Complex meow_mul
     return result;
 }
 
-inline Meow_FFT_Complex meow_mul_by_conjugate
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_mul_by_conjugate
 (
       const Meow_FFT_Complex lhs
     , const Meow_FFT_Complex rhs
@@ -517,7 +517,7 @@ inline Meow_FFT_Complex meow_mul_by_conjugate
     return result;
 }
 
-inline Meow_FFT_Complex meow_mul_by_j(const Meow_FFT_Complex lhs)
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_mul_by_j(const Meow_FFT_Complex lhs)
 {
     Meow_FFT_Complex result =
     {
@@ -528,7 +528,7 @@ inline Meow_FFT_Complex meow_mul_by_j(const Meow_FFT_Complex lhs)
     return result;
 }
 
-inline Meow_FFT_Complex meow_mulf
+inline __attribute__((always_inline)) Meow_FFT_Complex meow_mulf
 (
       const Meow_FFT_Complex lhs
     ,       float            rhs
@@ -2110,7 +2110,7 @@ void meow_recursive_fft_mixed_meow_radix_dit_i
 //
 // F(k) = Feven + (Wn(k) * Fodd) // <---- Remember ifft twiddles!, no * 0.5.
 
-inline void meow_mixer
+inline __attribute__((always_inline)) void meow_mixer
 (
       unsigned                N_2
     , Complex* w_2n
@@ -2149,7 +2149,7 @@ inline void meow_mixer
     }
 }
 
-inline void meow_mixer_i
+inline __attribute__((always_inline)) void meow_mixer_i
 (
       unsigned          N_2
     , Complex*          w_2n
