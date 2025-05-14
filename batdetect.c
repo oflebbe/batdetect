@@ -32,14 +32,16 @@
 
 #define SMALL_SPI 1
 
-const int WIDTH = 240;
-const int HEIGHT = 240;
-const int ROTATION = ROTATE_180;
+const bool STEREO = true;
 
-const int LABEL_SIZE = 2 * 6;
+const unsigned int WIDTH = 240;
+const unsigned int HEIGHT = 240;
+const unsigned int ROTATION = ROTATE_180;
 
-const int WIDTH_DISPLAY = WIDTH - LABEL_SIZE;
-const int HEIGHT_DISPLAY = HEIGHT - 8;
+const unsigned int LABEL_SIZE = 2 * 6;
+
+const unsigned int WIDTH_DISPLAY = WIDTH - LABEL_SIZE;
+const unsigned int HEIGHT_DISPLAY = HEIGHT - 8;
 #define NCOLORS 256
 
 const int ST7789_CS = 9;
@@ -56,7 +58,8 @@ const int ST7789_CLK = 10;
 // 9600  = 5,000 Hz
 
 const int CLOCK_DIV = 96 * 2;
-const int FSAMP = 500000 / 2;
+const int CLOCK_DIV_STEREO = 96;
+const unsigned int FSAMP = 500000 / 2;
 
 #define USE_FFT 1
 #include "hw_config.h"
@@ -64,11 +67,12 @@ const int FSAMP = 500000 / 2;
 // Channel 0 is GPIO26
 const int CAPTURE_CHANNEL = 0;
 
-// because NSAMP/2 > WIDTH
-#define NSAMP 512
-const int FACTOR = 300;
+// because FFT_SIZE/2 > HEIGHT
+constexpr unsigned int FFT_SIZE=512u;
 
-const int NUM_SAMPLES = NSAMP * FACTOR;
+const uint FACTOR = 300u;
+
+const uint NUM_SAMPLES = FFT_SIZE * FACTOR;
 
 // Queue for multiprocessing
 queue_t capture_queue;
@@ -85,18 +89,26 @@ void led(uint on)
 #endif
 }
 
-ST7789_t *setup(uint sample_dma_channel)
-{
-#ifndef PICO_W
-  gpio_init(PICO_DEFAULT_LED_PIN);
-  gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
-#else
-  cyw43_arch_init();
-#endif
+// setup audio
+// for stereo capture channel and capture_channel+1
 
-  adc_gpio_init(26 + CAPTURE_CHANNEL);
+void setup_for_audio(uint capture_channel, bool stereo, uint sample_dma_channel)
+{
+  adc_gpio_init(26 + capture_channel);
+  if (stereo)
+  {
+    adc_gpio_init(26 + capture_channel + 1);
+  }
   adc_init();
-  adc_select_input(CAPTURE_CHANNEL);
+
+  // adc_select_input(capture_channel+1);
+
+    if (stereo)
+  {
+    adc_set_round_robin(3); // channel 1 + 2
+  }
+  adc_select_input( 1);
+
   adc_fifo_drain();
   adc_fifo_setup(
       true,  // Write each completed conversion to the sample FIFO
@@ -107,8 +119,7 @@ ST7789_t *setup(uint sample_dma_channel)
   );
 
   // set sample rate
-  adc_set_clkdiv(CLOCK_DIV);
-
+  adc_set_clkdiv(stereo ? CLOCK_DIV_STEREO : CLOCK_DIV);
   sleep_ms(1000);
 
   dma_channel_config cfg = dma_channel_get_default_config(sample_dma_channel);
@@ -123,6 +134,18 @@ ST7789_t *setup(uint sample_dma_channel)
   dma_channel_set_config(sample_dma_channel, &cfg, false);
 
   dma_channel_set_read_addr(sample_dma_channel, &adc_hw->fifo, false);
+}
+
+ST7789_t *setup(uint sample_dma_channel, bool stereo)
+{
+#ifndef PICO_W
+  gpio_init(PICO_DEFAULT_LED_PIN);
+  gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+#else
+  cyw43_arch_init();
+#endif
+
+  setup_for_audio(0, stereo, sample_dma_channel);
 
 #ifdef SMALL_SPI
   ST7789_t *sobj = ST7789_spi_create(ST7789_INSTANCE, WIDTH, HEIGHT, ROTATION,
@@ -136,17 +159,25 @@ ST7789_t *setup(uint sample_dma_channel)
   return sobj;
 }
 
-void sample(uint dma_chan, int samples, uint16_t capture_buf[samples])
+// capture number of samples in capture_buf
+// stereo: true it is alternating L and R
+void sample(uint dma_chan, uint32_t samples, bool stereo, uint16_t capture_buf[samples])
 {
-  adc_run(false);
+  
+ adc_select_input( 1);
 
   // set number of samples (2 bytes each) to read
+
   dma_channel_set_trans_count(dma_chan, samples, false);
   // set write address and start
   dma_channel_set_write_addr(dma_chan, capture_buf, true);
 
   adc_run(true);
   dma_channel_wait_for_finish_blocking(dma_chan);
+  adc_run(false);
+
+  adc_fifo_drain();
+
 }
 
 static void init_hamming(int len, float window[len])
@@ -158,17 +189,17 @@ static void init_hamming(int len, float window[len])
   }
 }
 
-static int get_freqs(int pos, int num_freq)
+static unsigned int get_freqs(unsigned int pos, unsigned int num_freq)
 {
-  int start_freq = NSAMP / 2 - num_freq + pos;
-  return (start_freq * FSAMP / 1000) / NSAMP;
+  unsigned int start_freq = FFT_SIZE / 2u - num_freq + pos;
+  return (start_freq * FSAMP / 1000) / FFT_SIZE;
 }
 
 static int draw_labels(ST7789_t *sobj, unsigned int num_freq)
 {
-  const int NLABELS = 4;
+  const unsigned int NLABELS = 4;
 
-  for (int i = 0; i < NLABELS; i++)
+  for (size_t i = 0; i < NLABELS; i++)
   {
     char text[4] = {0};
     assert((i * num_freq) / NLABELS < num_freq);
@@ -199,7 +230,7 @@ uint sd_card_search(FATFS *fs)
 {
   DIR *dir = calloc(1, sizeof(DIR));
   FILINFO *fi = calloc(1, sizeof(FILINFO));
-  int num = 0;
+  uint num = 0;
   uint last = 0;
   FRESULT res = f_findfirst(dir, fi, "/", "bat???");
   if (res != FR_OK)
@@ -212,7 +243,7 @@ uint sd_card_search(FATFS *fs)
     {
       break;
     }
-    sscanf(fi->fname, "bat%d", &num);
+    sscanf(fi->fname, "bat%u", &num);
     if (num > last)
     {
       last = num;
@@ -239,9 +270,9 @@ uint sd_card_search(FATFS *fs)
 FIL fil;
 bool is_open = false;
 
-void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_buf[size])
+void sd_write(FATFS *fs, unsigned int dir_count, unsigned int file_count, UINT size, uint16_t cap_buf[size])
 {
-     led(1);
+  led(1);
   if (!is_open)
   {
     const int buf_len = snprintf(NULL, 0, filename_pattern, dir_count, file_count);
@@ -252,12 +283,11 @@ void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_b
     char str_buffer[buf_len + 1];
 
     snprintf(str_buffer, sizeof(str_buffer), filename_pattern, dir_count, file_count);
- 
 
     int fr = f_open(&fil, str_buffer, FA_WRITE | FA_CREATE_ALWAYS);
     if (FR_OK != fr && FR_EXIST != fr)
       panic("f_open(%s) error: %s (%d)\n", str_buffer, FRESULT_str(fr), fr);
-      is_open=true;
+    is_open = true;
   }
   UINT written;
   int res = f_write(&fil, cap_buf, size * 2, &written);
@@ -279,9 +309,9 @@ void sd_write(FATFS *fs, int dir_count, int file_count, int size, uint16_t cap_b
 void worker_display(void)
 {
   // create hamming window for FFT
-  // NSAMP entries
-  static float hamming[NSAMP] = {0};
-  init_hamming(NSAMP, hamming);
+  // FFT_SIZE entries
+  static float hamming[FFT_SIZE] = {0};
+  init_hamming(FFT_SIZE, hamming);
 
   // create color_table
   uint16_t color_table[NCOLORS] = {0};
@@ -291,31 +321,37 @@ void worker_display(void)
   }
 
   flo_pixmap_t *display = flo_pixmap_create(WIDTH_DISPLAY, HEIGHT_DISPLAY);
-  size_t workset_bytes = meow_fft_generate_workset_real(NSAMP, NULL);
+  size_t workset_bytes = meow_fft_generate_workset_real(FFT_SIZE, NULL);
   Meow_FFT_Workset_Real *fft_real =
       (Meow_FFT_Workset_Real *)malloc(workset_bytes);
-  meow_fft_generate_workset_real(NSAMP, fft_real);
+  meow_fft_generate_workset_real(FFT_SIZE, fft_real);
   while (true)
   {
     uint16_t *cap_buf = NULL;
     queue_remove_blocking(&capture_queue, &cap_buf);
 
-    const unsigned int last_valid_start = NUM_SAMPLES - NSAMP;
+    const unsigned int NUM_MONO_SAMPLES = STEREO ? NUM_SAMPLES / 2 : NUM_SAMPLES;
+    const unsigned int last_valid_start = NUM_MONO_SAMPLES - FFT_SIZE;
 
-    float *fft_in = malloc(NSAMP * sizeof(float));
-    Meow_FFT_Complex *fft_out = malloc((NSAMP / 2 + 1) * sizeof(Meow_FFT_Complex));
+    float *fft_in = malloc(FFT_SIZE * sizeof(float));
+    Meow_FFT_Complex *fft_out = malloc((FFT_SIZE / 2 + 1) * sizeof(Meow_FFT_Complex));
     for (unsigned int column = 0; column < display->width; column++)
     {
-      // kiss_fft_scalar is a float
-      // fill fourier transform input
-      // multiply with window function
-      // subtract voltage offset
 
       const unsigned int start = (column * last_valid_start) / display->width;
-      for (unsigned int i = 0; i < NSAMP; i++)
+      for (unsigned int i = 0; i < FFT_SIZE; i++)
       {
-        const unsigned int index = i + start;
+        unsigned int index = i + start;
+        if (STEREO)
+        {
+          index *= 2;
+        }
         assert(index < NUM_SAMPLES);
+        // convert to float
+        // fill fourier transform input
+        // subtract voltage offset
+        // multiply with window function
+
         fft_in[i] = ((float)cap_buf[index] - 2048.0f) * hamming[i];
       }
 
@@ -330,7 +366,7 @@ void worker_display(void)
       // scale is SQR( 4095  * 256 / 2)
       // log10(scale) = 11.43892
       // empirical lower limit log10(lower limit ) = 4
-      assert(NSAMP >= HEIGHT_DISPLAY);
+      assert(FFT_SIZE >= HEIGHT_DISPLAY);
       for (unsigned int y = 0; y < HEIGHT_DISPLAY; y++)
       {
         const float power = squaref(fft_out[y].r) + squaref(fft_out[y].j);
@@ -379,10 +415,14 @@ int main()
   }
   uint dir_count = sd_card_search(&fs);
   uint file_count = 0;
-  const uint sample_dma_chan = dma_claim_unused_channel(true);
+  int channel = dma_claim_unused_channel(true);
+  if (channel < 0) {
+    panic("no channel available");
+  }
+  const uint sample_dma_chan = (uint) channel;
 
   // setup ports and outputs
-  ST7789_t *sobj = setup(sample_dma_chan);
+  ST7789_t *sobj = setup(sample_dma_chan, STEREO);
 
   ST7789_fill_rect(sobj, 0, 0, WIDTH, HEIGHT, BLACK);
   // calculate frequencies of each bin and draw legend
@@ -393,7 +433,7 @@ int main()
   while (1)
   {
     // get NUM_SAMPLES samples at FSAMP
-    sample(sample_dma_chan, NUM_SAMPLES, cap_buf);
+    sample(sample_dma_chan, NUM_SAMPLES, STEREO, cap_buf);
     absolute_time_t start_processing = get_absolute_time();
 
     // send to FFT

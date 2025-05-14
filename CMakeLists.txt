@@ -1,21 +1,24 @@
-# == DO NEVER EDIT THE NEXT LINES for Raspberry Pi Pico VS Code Extension to work ==
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
 else()
     set(USERHOME $ENV{HOME})
 endif()
-set(sdkVersion 2.0.0)
-set(toolchainVersion 13_2_Rel1)
-set(picotoolVersion 2.0.0)
-include(${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+set(sdkVersion 2.1.1)
+set(toolchainVersion 14_2_Rel1)
+set(picotoolVersion 2.1.1)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
 # ====================================================================================
 cmake_minimum_required(VERSION 3.13)
 # set(PICO_BOARD "sparkfun_thingplus")
 # set(PICO_BOARD "pico_w")  # set PICO_W  as well
 set(PICO_BOARD "pico2")
 
-set(CMAKE_C_STANDARD 17)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_C_STANDARD 23)
+#set(CMAKE_CXX_STANDARD 17)
 
 include(pico_sdk_import.cmake)
 
@@ -24,6 +27,10 @@ project(batdetect C CXX ASM)
 pico_sdk_init()
 
 
+add_compile_options("-std=gnu2x" "-Wall" "-pedantic")
+add_compile_options("-Wformat" "-Wformat=2" "-Wsign-conversion" "-Werror=format-security" "-Wimplicit-fallthrough")
+add_compile_options("-Werror=implicit" "-Werror=incompatible-pointer-types" "-Werror=int-conversion")
+add_compile_options("-fexceptions")
 
 # add_compile_definitions(PICO_W)
 
