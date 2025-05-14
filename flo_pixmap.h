@@ -6,16 +6,24 @@
 #ifndef FLO_PIXMAP_H
 #define FLO_PIXMAP_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <stdlib.h>
+#include <stdint.h>
+#include <assert.h>
+
+typedef enum a
+{
+  RGB_565 = 0,
+  RGB_888 = 1,
+} flo_pixmap_format_t;
 
 // 16bit color flo_pixmap_t (565)
 typedef struct
 {
+  size_t len;
   unsigned int width;
   unsigned int height;
-  int len;
+
+  // flo_pixmap_format_t format;
   uint16_t buf[];
 } flo_pixmap_t;
 
@@ -31,36 +39,48 @@ typedef struct
 
 // allocates an flo_pixmap_t
 flo_pixmap_t *flo_pixmap_create(unsigned int width, unsigned int height);
-const flo_pixmap_t *flo_pixmap_create_str(int len, const char str[],
-                                        int16_t color, uint16_t bg,
-                                        int8_t size_x, int8_t size_y);
+const flo_pixmap_t *flo_pixmap_create_str(unsigned int len, const char str[len],
+                                          uint16_t color, uint16_t bg,
+                                          uint8_t size_x, uint8_t size_y);
 
-void flo_pixmap_draw_char(flo_pixmap_t *pixmap, int off_x, int off_y,
-                         unsigned char c, uint16_t color, uint16_t bg,
-                         int size_x, int size_y);
+void flo_pixmap_draw_char(flo_pixmap_t *pixmap, unsigned int off_x, unsigned int off_y,
+                          unsigned char c, uint16_t color, uint16_t bg,
+                          unsigned int size_x, unsigned int size_y);
 
 __attribute__((always_inline)) inline uint16_t flo_swap(uint16_t color)
 {
-  const uint8_t hi = (color >> 8) & 0xff;
-  const uint8_t lo = color & 0xff;
+  const uint8_t hi = (color >> 8) & 0xffu;
+  const uint8_t lo = color & 0xffu;
   return hi | (lo << 8);
-};
+}
 
-void flo_pixmap_set_pixel(flo_pixmap_t *pixmap, unsigned int x,
-                                unsigned int y, uint16_t color);
+__attribute__((always_inline)) inline void flo_pixmap_set_pixel(flo_pixmap_t *pixmap, unsigned int x,
+                                                                unsigned int y, uint16_t color)
+{
+  assert(x < pixmap->width);
+  assert(y < pixmap->height);
+  pixmap->buf[y * pixmap->width + x] = color; // flo_swap(color);
+}
 
-
-uint16_t flo_hslToRgb565(float h, float s, float l);
+static inline uint16_t flo_hsvToRgb565(float h, float s, float l);
+static inline uint16_t flo_hslToRgb565(float h, float s, float l);
 
 #ifdef FLO_PIXMAP_IMPLEMENTATION
 
-#include <stdlib.h>
-#include <stdint.h>
-#include <assert.h>
+#include <math.h>
 
 static const unsigned int flo_char_width = 5;
 static const unsigned int flo_char_space = 1;
 static const unsigned int flo_char_height = 8;
+
+static inline uint16_t flo__color565(float r, float g, float b)
+{
+  const uint16_t r_ = (uint8_t)(r * 255.0f);
+  const uint16_t g_ = (uint8_t)(g * 255.0f);
+  const uint16_t b_ = (uint8_t)(b * 255.0f);
+
+  return ((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | ((b_ & 0xF8) >> 3);
+}
 
 static float flo__hue2rgb(float p, float q, float t)
 {
@@ -73,21 +93,19 @@ static float flo__hue2rgb(float p, float q, float t)
   if (t < (1. / 2.))
     return q;
   if (t < (2. / 3.))
-    return p + (q - p) * ((2. / 3.) - t) * 6;
+    return p + (q - p) * ((2.f / 3.f) - t) * 6.f;
   return p;
 }
 
-static inline uint16_t flo__color565(float r, float g, float b)
+static inline uint16_t flo_hslToRgb565(float h, float s, float l)
 {
-  const uint16_t r_ = (uint8_t) (r * 255.0f);
-  const uint16_t g_ = (uint8_t) (g * 255.0f);
-  const uint16_t b_ = (uint8_t) (b * 255.0f);
+  assert(h >= 0);
+  assert(h <= 1.0);
+  assert(s >= 0);
+  assert(s <= 1.0);
+  assert(l >= 0);
+  assert(l <= 1.0);
 
-  return ((r_ & 0xF8) << 8) | ((g_ & 0xFC) << 3) | ((b_ & 0xF8) >> 3);
-}
-
-uint16_t flo_hslToRgb565(float h, float s, float l)
-{
   float r, g, b;
 
   if (s == 0)
@@ -97,14 +115,45 @@ uint16_t flo_hslToRgb565(float h, float s, float l)
   else
   {
     const float q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const float p = 2 * l - q;
+    const float p = 2.0f * l - q;
 
-    r = flo__hue2rgb(p, q, h + 1 / 3.);
+    r = flo__hue2rgb(p, q, h + 1.0f / 3.0f);
     g = flo__hue2rgb(p, q, h);
-    b = flo__hue2rgb(p, q, h - 1 / 3.);
+    b = flo__hue2rgb(p, q, h - 1.0f / 3.0f);
   }
 
   return flo__color565(r, g, b);
+}
+
+static inline uint16_t flo_hsvToRgb565(float h, float s, float v)
+{
+  assert( h >= 0);
+  h *= 360.f;
+  const float hi = floorf(h / 60.0f);
+  const float f = h / 60.f - hi;
+  const float p = v * (1.0f - s);
+  const float q = v * (1.0f - s * f);
+  const float t = v * (1.0f - s * (1.0f - f));
+
+  switch ((int) hi)
+  {
+  case 0:
+  [[fallthrough]];
+  case 6:
+    return flo__color565(v, t, p);
+  case 1:
+    return flo__color565(q, v, p);
+  case 2:
+    return flo__color565(p, v, t);
+  case 3:
+    return flo__color565(p, q, v);
+  case 4:
+    return flo__color565(t, p, v);
+  case 5:
+    return flo__color565(v, p, q);
+  default:
+    abort();
+  }
 }
 
 // Standard ASCII 5x7 font
@@ -229,8 +278,8 @@ const uint8_t flo_font[] = {
 // should be deallocated with free
 flo_pixmap_t *flo_pixmap_create(unsigned int width, unsigned int height)
 {
-  int len = width * height;
-  flo_pixmap_t *pixmap = (flo_pixmap_t *) calloc(1, sizeof(flo_pixmap_t) + sizeof(uint16_t) * len);
+  size_t len = (size_t) width * (size_t) height;
+  flo_pixmap_t *pixmap = (flo_pixmap_t *)calloc(1, sizeof(flo_pixmap_t) + sizeof(uint16_t) * len + 2000);
   if (pixmap == NULL)
   {
     abort();
@@ -240,17 +289,17 @@ flo_pixmap_t *flo_pixmap_create(unsigned int width, unsigned int height)
   return pixmap;
 }
 
-const flo_pixmap_t *flo_pixmap_create_str(int len, const char str[],
-                                        int16_t color, uint16_t bg,
-                                        int8_t size_x, int8_t size_y)
+const flo_pixmap_t *flo_pixmap_create_str(unsigned int len, const char str[len],
+                                          uint16_t color, uint16_t bg,
+                                          uint8_t size_x, uint8_t size_y)
 {
   flo_pixmap_t *pixmap = flo_pixmap_create(len * (flo_char_width + flo_char_space) * size_x,
-                                         flo_char_height * size_y);
+                                           flo_char_height * size_y);
   if (pixmap == NULL)
   {
     abort();
   }
-  for (int i = 0; i < len; i++)
+  for (unsigned int i = 0; i < len; i++)
   {
     flo_pixmap_draw_char(
         pixmap, i * (flo_char_width + flo_char_space) * size_x, 0, str[i],
@@ -259,14 +308,13 @@ const flo_pixmap_t *flo_pixmap_create_str(int len, const char str[],
   return pixmap;
 }
 
-void flo_pixmap_draw_char(flo_pixmap_t *pixmap, int off_x, int off_y,
-                         unsigned char c, uint16_t color, uint16_t bg,
-                         int size_x, int size_y)
+void flo_pixmap_draw_char(flo_pixmap_t *pixmap, unsigned int off_x, unsigned int off_y,
+                          unsigned char c, uint16_t color, uint16_t bg,
+                          unsigned int size_x, unsigned int size_y)
 {
-  if (off_x < 0 || off_y < 0)
-  {
-    abort();
-  }
+  assert(size_x >= 1);
+  assert(size_y >= 1);
+
   if (off_x + (size_x - 1) + flo_char_width > pixmap->width ||
       off_y + (size_y - 1) + flo_char_height > pixmap->height)
   {
@@ -281,16 +329,16 @@ void flo_pixmap_draw_char(flo_pixmap_t *pixmap, int off_x, int off_y,
 
   for (uint8_t i = 0; i < flo_char_width; i++)
   { // Char o1af_pixmap = 5 columns
-    uint8_t line = flo_font[(int)c * flo_char_width + i];
+    uint8_t line = flo_font[c * flo_char_width + i];
     for (uint8_t j = 0; j < flo_char_height; j++, line >>= 1)
     {
-      for (int x = 0; x < size_x; x++)
+      for (unsigned int x = 0; x < size_x; x++)
       {
-        for (int y = 0; y < size_y; y++)
+        for (unsigned int y = 0; y < size_y; y++)
         {
-          int index = (off_y + j * size_y + y) * pixmap->width +
+          unsigned int index = (off_y + j * size_y + y) * pixmap->width +
                       (off_x + i * size_x + x);
-          if (index >= 0 && index < pixmap->len)
+          if (index < pixmap->len)
           {
             pixmap->buf[index] = line & 1 ? color : bg;
           }
@@ -300,13 +348,6 @@ void flo_pixmap_draw_char(flo_pixmap_t *pixmap, int off_x, int off_y,
   }
 }
 
-void flo_pixmap_set_pixel(flo_pixmap_t *pixmap, unsigned int x,
-                                unsigned int y, uint16_t color)
-{
-  assert(x < pixmap->width);
-  assert(y < pixmap->height);
-  pixmap->buf[y * pixmap->width + x] = flo_swap(color);
-}
 #endif
 
 #ifdef __cplusplus
