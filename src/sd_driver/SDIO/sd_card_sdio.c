@@ -557,7 +557,12 @@ static DSTATUS sd_sdio_init(sd_card_t *sd_card_p) {
     gpio_conf(sd_card_p->sdio_if_p->D1_gpio,  GPIO_FUNC_PIO1, true, false, false, true);
     gpio_conf(sd_card_p->sdio_if_p->D2_gpio,  GPIO_FUNC_PIO1, true, false, false, true);
     gpio_conf(sd_card_p->sdio_if_p->D3_gpio,  GPIO_FUNC_PIO1, true, false, false, true);
-
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->CLK_gpio, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->CMD_gpio, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->D0_gpio, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->D1_gpio, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->D2_gpio, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate( sd_card_p->sdio_if_p->D3_gpio, GPIO_SLEW_RATE_SLOW);
     bool ok = sd_sdio_begin(sd_card_p);
     if (ok) {
         // The card is now initialized

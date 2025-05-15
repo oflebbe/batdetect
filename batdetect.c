@@ -103,7 +103,7 @@ void setup_for_audio(uint capture_channel, bool stereo, uint sample_dma_channel)
 
   // adc_select_input(capture_channel+1);
 
-    if (stereo)
+  if (stereo)
   {
     adc_set_round_robin(3); // channel 1 + 2
   }
@@ -114,7 +114,7 @@ void setup_for_audio(uint capture_channel, bool stereo, uint sample_dma_channel)
       true,  // Write each completed conversion to the sample FIFO
       true,  // Enable DMA data request (DREQ)
       1,     // DREQ (and IRQ) asserted when at least 1 sample present
-      false, // We won't see the ERR bit because of 8 bit reads; disable.
+      true, // We won't see the ERR bit because of 8 bit reads; disable.
       false  // Shift each sample to 8 bits when pushing to FIFO
   );
 
@@ -128,6 +128,7 @@ void setup_for_audio(uint capture_channel, bool stereo, uint sample_dma_channel)
   channel_config_set_transfer_data_size(&cfg, DMA_SIZE_16);
   channel_config_set_read_increment(&cfg, false);
   channel_config_set_write_increment(&cfg, true);
+  channel_config_set_high_priority(&cfg, true);
 
   // Pace transfers based on availability of ADC samples
   channel_config_set_dreq(&cfg, DREQ_ADC);
@@ -172,6 +173,7 @@ void sample(uint dma_chan, uint32_t samples, bool stereo, uint16_t capture_buf[s
   // set write address and start
   dma_channel_set_write_addr(dma_chan, capture_buf, true);
 
+  adc_fifo_drain();
   adc_run(true);
   dma_channel_wait_for_finish_blocking(dma_chan);
   adc_run(false);
@@ -272,6 +274,7 @@ bool is_open = false;
 
 void sd_write(FATFS *fs, unsigned int dir_count, unsigned int file_count, UINT size, uint16_t cap_buf[size])
 {
+  static int counter = 0;
   led(1);
   if (!is_open)
   {
@@ -291,12 +294,15 @@ void sd_write(FATFS *fs, unsigned int dir_count, unsigned int file_count, UINT s
   }
   UINT written;
   int res = f_write(&fil, cap_buf, size * 2, &written);
-  if (written != size * 2 || res != FR_OK)
+   if (written != size * 2 || res != FR_OK)
   {
     panic("could not write buffer len %d, written %d, result %d\n", size * 2,
           written, res);
   }
-  f_sync(&fil);
+  counter = (counter + 1) % 10;
+  if (counter==0) {
+     f_sync(&fil);
+  }
   /*fr = f_close(&fil);
   if (FR_OK != fr)
   {

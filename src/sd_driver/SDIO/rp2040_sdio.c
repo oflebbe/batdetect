@@ -840,20 +840,20 @@ bool rp2040_sdio_init(sd_card_t *sd_card_p, float clk_div) {
     gpio_set_function(SDIO_D2, fn);
     gpio_set_function(SDIO_D3, fn);
 
-    gpio_set_slew_rate(SDIO_CMD, GPIO_SLEW_RATE_FAST);
-    gpio_set_slew_rate(SDIO_CLK, GPIO_SLEW_RATE_FAST);
-    gpio_set_slew_rate(SDIO_D0, GPIO_SLEW_RATE_FAST);
-    gpio_set_slew_rate(SDIO_D1, GPIO_SLEW_RATE_FAST);
-    gpio_set_slew_rate(SDIO_D2, GPIO_SLEW_RATE_FAST);
-    gpio_set_slew_rate(SDIO_D3, GPIO_SLEW_RATE_FAST);
+    gpio_set_slew_rate(SDIO_CMD, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate(SDIO_CLK, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate(SDIO_D0, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate(SDIO_D1, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate(SDIO_D2, GPIO_SLEW_RATE_SLOW);
+    gpio_set_slew_rate(SDIO_D3, GPIO_SLEW_RATE_SLOW);
 
     if (sd_card_p->sdio_if_p->set_drive_strength) {
-        gpio_set_drive_strength(SDIO_CMD, sd_card_p->sdio_if_p->CMD_gpio_drive_strength);
-        gpio_set_drive_strength(SDIO_CLK, sd_card_p->sdio_if_p->CLK_gpio_drive_strength);
-        gpio_set_drive_strength(SDIO_D0, sd_card_p->sdio_if_p->D0_gpio_drive_strength);
-        gpio_set_drive_strength(SDIO_D1, sd_card_p->sdio_if_p->D1_gpio_drive_strength);
-        gpio_set_drive_strength(SDIO_D2, sd_card_p->sdio_if_p->D2_gpio_drive_strength);
-        gpio_set_drive_strength(SDIO_D3, sd_card_p->sdio_if_p->D3_gpio_drive_strength);
+        gpio_set_drive_strength(SDIO_CMD, GPIO_DRIVE_STRENGTH_2MA);
+        gpio_set_drive_strength(SDIO_CLK, GPIO_DRIVE_STRENGTH_2MA);
+        gpio_set_drive_strength(SDIO_D0, GPIO_DRIVE_STRENGTH_2MA);
+        gpio_set_drive_strength(SDIO_D1, GPIO_DRIVE_STRENGTH_2MA);
+        gpio_set_drive_strength(SDIO_D2, GPIO_DRIVE_STRENGTH_2MA);
+        gpio_set_drive_strength(SDIO_D3, GPIO_DRIVE_STRENGTH_2MA);
     }
 
     return true;
